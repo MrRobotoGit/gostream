@@ -550,13 +550,17 @@ install_python_deps() {
 
     print_info "Installing Python dependencies..."
 
+    # --break-system-packages is required on Debian 12+ / Raspberry Pi OS Bookworm
+    # This is intentional: the Pi is a single-purpose server, not a shared system.
+    local pip_flags="--quiet --break-system-packages"
+
     if [ -f "$req_file" ]; then
-        pip3 install -r "$req_file" --quiet
+        pip3 install -r "$req_file" $pip_flags
         print_ok "Python dependencies installed from requirements.txt"
     else
         # Install the known runtime dependencies directly
         print_warn "requirements.txt not found — installing known dependencies."
-        pip3 install --quiet \
+        pip3 install $pip_flags \
             requests \
             psutil \
             "fastapi>=0.100.0" \
