@@ -1,0 +1,49 @@
+[Unit]
+Description=GoStream Unified Engine (GoStorm + FUSE Proxy)
+After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+# Memory tuning — adjust for your hardware (256MB+ RAM systems: 2200MiB is safe for Pi 4)
+Environment=GOMEMLIMIT=2200MiB
+Environment=GOGC=100
+
+Type=simple
+# Change User/Group to the account that owns the install directory
+User=pi
+Group=pi
+
+# Change to your GoStream install directory
+WorkingDirectory=/home/pi/GoStream
+
+# Wait for DNS before starting (required for tracker resolution)
+ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5; do nslookup www.google.com >/dev/null 2>&1 && exit 0 || sleep 2; done; exit 1'
+
+# FUSE mount cleanup and creation — set FUSE_MOUNT to match fuse_mount_path in config.json
+ExecStartPre=-/usr/bin/fusermount -uz /mnt/torrserver-go
+ExecStartPre=/bin/mkdir -p /mnt/torrserver-go
+
+# Main binary — no CLI args needed: --path defaults to WorkingDirectory,
+# physical_source_path and fuse_mount_path are read from config.json
+ExecStart=/home/pi/GoStream/gostream
+
+# Restart Samba and NFS after gostream starts (required for FUSE-backed shares)
+ExecStartPost=/bin/sleep 2
+ExecStartPost=/usr/bin/sudo /bin/systemctl restart smbd
+ExecStartPost=/usr/bin/sudo /bin/systemctl restart nfs-kernel-server
+
+# FUSE unmount on stop
+ExecStop=/usr/bin/fusermount -uz /mnt/torrserver-go
+
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Change log path to match your logs directory (parent of GoStream dir + /logs)
+StandardOutput=append:/home/pi/logs/gostream.log
+StandardError=append:/home/pi/logs/gostream.log
+
+[Install]
+WantedBy=multi-user.target

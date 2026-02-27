@@ -1,0 +1,737 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# GoStream Installer v1.4.4
+# Unified Engine (GoStorm + FUSE Proxy)
+# Target: Raspberry Pi 4 (arm64), 24/7 production
+# ==============================================================================
+set -e
+
+# ------------------------------------------------------------------------------
+# Color output (graceful fallback when not running in a terminal)
+# ------------------------------------------------------------------------------
+if [ -t 1 ] && command -v tput >/dev/null 2>&1; then
+    RED=$(tput setaf 1)
+    GREEN=$(tput setaf 2)
+    YELLOW=$(tput setaf 3)
+    BLUE=$(tput setaf 4)
+    BOLD=$(tput bold)
+    NC=$(tput sgr0)
+else
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    BOLD='\033[1m'
+    NC='\033[0m'
+fi
+
+# ------------------------------------------------------------------------------
+# Helper: print a colored section header
+# ------------------------------------------------------------------------------
+print_header() {
+    echo ""
+    echo "${BOLD}${BLUE}=== $1 ===${NC}"
+    echo ""
+}
+
+print_ok()   { echo "  ${GREEN}✓${NC} $1"; }
+print_warn() { echo "  ${YELLOW}⚠${NC}  $1"; }
+print_err()  { echo "  ${RED}✗${NC} $1"; }
+print_info() { echo "  ${BLUE}→${NC} $1"; }
+
+# ------------------------------------------------------------------------------
+# Helper: ask "Prompt" "default" VAR_NAME
+#   Displays [default] hint; if user presses Enter, uses default.
+# ------------------------------------------------------------------------------
+ask() {
+    local prompt="$1"
+    local default="$2"
+    local var_name="$3"
+    local user_input
+
+    if [ -n "$default" ]; then
+        printf "  %s [%s]: " "$prompt" "$default"
+    else
+        printf "  %s: " "$prompt"
+    fi
+
+    read -r user_input
+    if [ -z "$user_input" ]; then
+        user_input="$default"
+    fi
+    # Assign to the caller's variable by name
+    printf -v "$var_name" '%s' "$user_input"
+}
+
+# ------------------------------------------------------------------------------
+# Helper: ask_secret "Prompt" VAR_NAME
+#   Hidden input (no echo); no default shown for security.
+# ------------------------------------------------------------------------------
+ask_secret() {
+    local prompt="$1"
+    local var_name="$2"
+    local user_input
+
+    printf "  %s: " "$prompt"
+    read -rs user_input
+    echo ""  # newline after hidden input
+    printf -v "$var_name" '%s' "$user_input"
+}
+
+# ------------------------------------------------------------------------------
+# Helper: ask_yn "Question" [default_yn]
+#   Returns 0 for yes, 1 for no.
+#   default_yn should be "y" or "n" (case-insensitive).
+# ------------------------------------------------------------------------------
+ask_yn() {
+    local question="$1"
+    local default="${2:-n}"
+    local hint user_input
+
+    if [ "${default,,}" = "y" ]; then
+        hint="Y/n"
+    else
+        hint="y/N"
+    fi
+
+    printf "  %s [%s]: " "$question" "$hint"
+    read -r user_input
+
+    if [ -z "$user_input" ]; then
+        user_input="$default"
+    fi
+
+    case "${user_input,,}" in
+        y|yes) return 0 ;;
+        *)     return 1 ;;
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# ASCII Banner
+# ------------------------------------------------------------------------------
+show_banner() {
+    echo ""
+    echo "${BOLD}${BLUE}╔══════════════════════════════════════╗${NC}"
+    echo "${BOLD}${BLUE}║     GoStream Installer v1.4.4        ║${NC}"
+    echo "${BOLD}${BLUE}╚══════════════════════════════════════╝${NC}"
+    echo ""
+    echo "  Unified Engine: GoStorm BitTorrent + FUSE Virtual Filesystem"
+    echo "  Target:         Raspberry Pi 4 (arm64), 24/7 production"
+    echo ""
+}
+
+# ==============================================================================
+# [0] Prerequisite checks
+# ==============================================================================
+check_prerequisites() {
+    print_header "Checking Prerequisites"
+
+    local all_ok=true
+
+    # python3 >= 3.9
+    if command -v python3 >/dev/null 2>&1; then
+        local py_ver
+        py_ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+        local py_major py_minor
+        py_major=$(echo "$py_ver" | cut -d. -f1)
+        py_minor=$(echo "$py_ver" | cut -d. -f2)
+        if [ "$py_major" -gt 3 ] || { [ "$py_major" -eq 3 ] && [ "$py_minor" -ge 9 ]; }; then
+            print_ok "python3 ($py_ver)"
+        else
+            print_err "python3 found but version $py_ver < 3.9 (required)"
+            all_ok=false
+        fi
+    else
+        print_err "python3 not found (required)"
+        all_ok=false
+    fi
+
+    # pip3
+    if command -v pip3 >/dev/null 2>&1; then
+        print_ok "pip3"
+    else
+        print_err "pip3 not found (required for Python dependencies)"
+        all_ok=false
+    fi
+
+    # fusermount3 or fusermount (FUSE userspace tool)
+    if command -v fusermount3 >/dev/null 2>&1; then
+        print_ok "fusermount3"
+        FUSERMOUNT_CMD="fusermount3"
+    elif command -v fusermount >/dev/null 2>&1; then
+        print_ok "fusermount (fusermount3 preferred but fusermount found)"
+        FUSERMOUNT_CMD="fusermount"
+    else
+        print_err "fusermount3/fusermount not found (install: sudo apt install fuse3)"
+        all_ok=false
+    fi
+
+    # systemctl
+    if command -v systemctl >/dev/null 2>&1; then
+        print_ok "systemctl"
+    else
+        print_err "systemctl not found (systemd required for service management)"
+        all_ok=false
+    fi
+
+    # curl (used for Plex auto-discovery and health-check — not strictly fatal)
+    if command -v curl >/dev/null 2>&1; then
+        print_ok "curl"
+    else
+        print_warn "curl not found — Plex library auto-discovery will be skipped"
+    fi
+
+    echo ""
+    if [ "$all_ok" = false ]; then
+        print_err "One or more required prerequisites are missing. Please install them and re-run."
+        exit 1
+    fi
+}
+
+# ==============================================================================
+# [1/5] System Paths
+# ==============================================================================
+collect_paths() {
+    print_header "[1/5] System Paths"
+
+    ask "GoStream install directory" "/home/pi/GoStream" INSTALL_DIR
+    ask "Physical MKV source path   (physical_source_path)" "/mnt/gostream-mkv-real" STORAGE_PATH
+    ask "FUSE virtual mount path     (fuse_mount_path)"     "/mnt/gostream-mkv-virtual" FUSE_MOUNT
+    ask "System user that owns GoStream" "pi" SYSTEM_USER
+
+    # Derive BASE_DIR as the parent of INSTALL_DIR (holds logs/ and STATE/)
+    BASE_DIR="$(dirname "${INSTALL_DIR}")"
+
+    echo ""
+    print_info "Derived base directory : ${BASE_DIR}"
+    print_info "Logs directory         : ${BASE_DIR}/logs/"
+    print_info "State directory        : ${BASE_DIR}/STATE/"
+}
+
+# ==============================================================================
+# [2/5] Plex Configuration
+# ==============================================================================
+collect_plex() {
+    print_header "[2/5] Plex Configuration"
+
+    ask       "Plex server URL"  "http://127.0.0.1:32400" PLEX_URL
+    ask_secret "Plex token (hidden)" PLEX_TOKEN
+
+    PLEX_LIBRARY_ID=0
+
+    # Auto-discover library sections if we have curl and a non-empty token
+    if [ -n "$PLEX_TOKEN" ] && command -v curl >/dev/null 2>&1; then
+        echo ""
+        print_info "Querying Plex for library sections..."
+        local sections_xml
+        if sections_xml=$(curl -sf --max-time 8 \
+                "${PLEX_URL}/library/sections?X-Plex-Token=${PLEX_TOKEN}" 2>/dev/null); then
+            # Parse XML with python3: extract (key, title) pairs for video libraries
+            local parsed
+            parsed=$(python3 - <<'PYEOF'
+import sys, xml.etree.ElementTree as ET
+
+xml_text = sys.stdin.read()
+try:
+    root = ET.fromstring(xml_text)
+except ET.ParseError as e:
+    print(f"XML_PARSE_ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
+
+sections = []
+for directory in root.findall('Directory'):
+    lib_type = directory.get('type', '')
+    if lib_type in ('movie', 'show'):
+        key = directory.get('key', '')
+        title = directory.get('title', '(unknown)')
+        sections.append(f"{key}:{title}:{lib_type}")
+
+print('\n'.join(sections))
+PYEOF
+                <<< "$sections_xml") || true
+
+            if [ -n "$parsed" ]; then
+                echo ""
+                echo "  Available Plex libraries:"
+                local i=1
+                local -a lib_keys lib_titles
+                while IFS= read -r line; do
+                    local key title lib_type
+                    key="${line%%:*}"
+                    rest="${line#*:}"
+                    lib_type="${rest##*:}"
+                    title="${rest%:*}"
+                    lib_keys+=("$key")
+                    lib_titles+=("$title ($lib_type)")
+                    printf "    %d) [%s] %s\n" "$i" "$key" "$title ($lib_type)"
+                    (( i++ )) || true
+                done <<< "$parsed"
+
+                echo ""
+                ask "Select library number (0 to enter manually)" "0" _lib_choice
+
+                if [ "$_lib_choice" -gt 0 ] 2>/dev/null && \
+                   [ "$_lib_choice" -le "${#lib_keys[@]}" ] 2>/dev/null; then
+                    local idx=$(( _lib_choice - 1 ))
+                    PLEX_LIBRARY_ID="${lib_keys[$idx]}"
+                    print_ok "Selected: ${lib_titles[$idx]} (ID: ${PLEX_LIBRARY_ID})"
+                else
+                    ask "Plex library ID (numeric)" "1" PLEX_LIBRARY_ID
+                fi
+            else
+                print_warn "No movie/TV libraries found — entering manually."
+                ask "Plex library ID (numeric)" "1" PLEX_LIBRARY_ID
+            fi
+        else
+            print_warn "Could not reach Plex at ${PLEX_URL} — entering library ID manually."
+            ask "Plex library ID (numeric)" "1" PLEX_LIBRARY_ID
+        fi
+    else
+        if [ -z "$PLEX_TOKEN" ]; then
+            print_warn "No Plex token provided — skipping auto-discovery."
+        fi
+        ask "Plex library ID (numeric)" "1" PLEX_LIBRARY_ID
+    fi
+}
+
+# ==============================================================================
+# [3/5] External APIs
+# ==============================================================================
+collect_apis() {
+    print_header "[3/5] External APIs"
+
+    ask "TMDB API key (optional — leave empty to skip movie sync)" "" TMDB_API_KEY
+    ask "Torrentio base URL" "https://torrentio.strem.fun" TORRENTIO_URL
+
+    if [ -z "$TMDB_API_KEY" ]; then
+        print_warn "No TMDB key entered. Movie sync (gostorm-sync-complete.py) will not function."
+    else
+        print_ok "TMDB API key set."
+    fi
+}
+
+# ==============================================================================
+# [4/5] Hardware & Network
+# ==============================================================================
+collect_hardware() {
+    print_header "[4/5] Hardware & Network"
+
+    ask "GOMEMLIMIT (MiB)  — 2200 is optimal for Pi 4 / 4GB" "2200" GOMEMLIMIT_MB
+    ask "Disk warmup quota (GB)" "32" DISK_WARMUP_GB
+    ask "Proxy listen port        (proxy_listen_port)" "8080" PROXY_PORT
+    ask "Metrics/dashboard port   (metrics_port)"      "8096" METRICS_PORT
+    ask "Health monitor port      (health-monitor.py)" "8095" DASHBOARD_PORT
+
+    # NAT-PMP
+    echo ""
+    NATPMP_ENABLED=false
+    NATPMP_GATEWAY=""
+    VPN_INTERFACE="wg0"
+
+    if ask_yn "Enable NAT-PMP (WireGuard port forwarding)?" "n"; then
+        NATPMP_ENABLED=true
+        ask "NAT-PMP gateway IP" "" NATPMP_GATEWAY
+        ask "VPN interface" "wg0" VPN_INTERFACE
+        print_ok "NAT-PMP enabled (gateway: ${NATPMP_GATEWAY}, interface: ${VPN_INTERFACE})"
+    else
+        print_info "NAT-PMP disabled."
+    fi
+}
+
+# ==============================================================================
+# [5/5] Installing — step implementations
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 5a. Generate config.json from config.json.example
+# ------------------------------------------------------------------------------
+generate_config_json() {
+    local example_path="${INSTALL_DIR}/config.json.example"
+    local output_path="${INSTALL_DIR}/config.json"
+
+    print_info "Generating config.json..."
+
+    if [ ! -f "$example_path" ]; then
+        print_warn "config.json.example not found at ${example_path}"
+        print_warn "Generating config.json from built-in template instead."
+        # Write the embedded template so the python script below can update it
+        cat > "$example_path" <<'TEMPLATE_EOF'
+{
+  "master_concurrency_limit": 25,
+  "read_ahead_budget_mb": 256,
+  "metadata_cache_size_mb": 50,
+  "write_buffer_size_kb": 64,
+  "read_buffer_size_kb": 1024,
+  "fuse_block_size_bytes": 1048576,
+  "streaming_threshold_kb": 128,
+  "max_concurrent_streaming": 25,
+  "log_level": "INFO",
+  "attr_timeout_seconds": 1,
+  "entry_timeout_seconds": 1,
+  "negative_timeout_seconds": 0,
+  "http_client_timeout_seconds": 30,
+  "max_retry_attempts": 6,
+  "retry_delay_ms": 500,
+  "rescue_grace_period_seconds": 240,
+  "rescue_cooldown_hours": 24,
+  "preload_workers_count": 4,
+  "preload_initial_delay_ms": 1000,
+  "warm_start_idle_seconds": 6,
+  "max_concurrent_prefetch": 3,
+  "cache_cleanup_interval_min": 5,
+  "max_cache_entries": 10000,
+  "gostorm_url": "http://127.0.0.1:8090",
+  "proxy_listen_port": 8080,
+  "metrics_port": 8096,
+  "blocklist_url": "https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz",
+  "physical_source_path": "/mnt/gostream-mkv-real",
+  "fuse_mount_path": "/mnt/gostream-mkv-virtual",
+  "disk_warmup_quota_gb": 32,
+  "warmup_head_size_mb": 64,
+  "natpmp": {
+    "enabled": false,
+    "gateway": "",
+    "local_port": 8091,
+    "vpn_interface": "wg0",
+    "lifetime": 60,
+    "refresh": 45
+  },
+  "plex": {
+    "url": "http://127.0.0.1:32400",
+    "token": "",
+    "library_id": 0
+  },
+  "tmdb_api_key": ""
+}
+TEMPLATE_EOF
+    fi
+
+    # Use python3 to safely read JSON, update fields, and write output
+    python3 - <<PYEOF
+import json, sys
+
+example_path = "${example_path}"
+output_path  = "${output_path}"
+
+with open(example_path, 'r') as fh:
+    cfg = json.load(fh)
+
+# --- Paths ---
+cfg['physical_source_path'] = "${STORAGE_PATH}"
+cfg['fuse_mount_path']       = "${FUSE_MOUNT}"
+
+# --- Network ---
+cfg['proxy_listen_port'] = int("${PROXY_PORT}")
+cfg['metrics_port']      = int("${METRICS_PORT}")
+
+# --- Hardware ---
+cfg['disk_warmup_quota_gb'] = int("${DISK_WARMUP_GB}")
+
+# --- External APIs ---
+if "${TMDB_API_KEY}":
+    cfg['tmdb_api_key'] = "${TMDB_API_KEY}"
+
+# --- Plex block ---
+if 'plex' not in cfg or not isinstance(cfg.get('plex'), dict):
+    cfg['plex'] = {}
+cfg['plex']['url']        = "${PLEX_URL}"
+cfg['plex']['token']      = "${PLEX_TOKEN}"
+try:
+    cfg['plex']['library_id'] = int("${PLEX_LIBRARY_ID}")
+except ValueError:
+    cfg['plex']['library_id'] = 0
+
+# --- NAT-PMP block ---
+if 'natpmp' not in cfg or not isinstance(cfg.get('natpmp'), dict):
+    cfg['natpmp'] = {
+        "local_port": 8091,
+        "lifetime": 60,
+        "refresh": 45
+    }
+natpmp_enabled_str = "${NATPMP_ENABLED}"
+cfg['natpmp']['enabled']       = natpmp_enabled_str.lower() == 'true'
+cfg['natpmp']['gateway']       = "${NATPMP_GATEWAY}"
+cfg['natpmp']['vpn_interface'] = "${VPN_INTERFACE}"
+
+with open(output_path, 'w') as fh:
+    json.dump(cfg, fh, indent=2)
+    fh.write('\n')
+
+print(f"  Written: {output_path}")
+PYEOF
+
+    print_ok "config.json written to ${output_path}"
+}
+
+# ------------------------------------------------------------------------------
+# 5b. Install Python dependencies
+# ------------------------------------------------------------------------------
+install_python_deps() {
+    local req_file="${INSTALL_DIR}/requirements.txt"
+
+    print_info "Installing Python dependencies..."
+
+    if [ -f "$req_file" ]; then
+        pip3 install -r "$req_file" --quiet
+        print_ok "Python dependencies installed from requirements.txt"
+    else
+        # Install the known runtime dependencies directly
+        print_warn "requirements.txt not found — installing known dependencies."
+        pip3 install --quiet \
+            requests \
+            psutil \
+            "fastapi>=0.100.0" \
+            "uvicorn[standard]"
+        print_ok "Core Python packages installed (requests, psutil, fastapi, uvicorn)"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 5c. Create directories
+# ------------------------------------------------------------------------------
+create_directories() {
+    print_info "Creating required directories..."
+
+    # Directories that belong to the system user (no sudo needed if running as that user)
+    local user_dirs=(
+        "${BASE_DIR}/STATE"
+        "${BASE_DIR}/logs"
+    )
+
+    for d in "${user_dirs[@]}"; do
+        if mkdir -p "$d" 2>/dev/null; then
+            print_ok "Created: $d"
+        elif sudo mkdir -p "$d"; then
+            sudo chown "${SYSTEM_USER}:${SYSTEM_USER}" "$d"
+            print_ok "Created (sudo): $d"
+        else
+            print_err "Failed to create: $d"
+            exit 1
+        fi
+    done
+
+    # Directories under /mnt may require sudo
+    local root_dirs=(
+        "${STORAGE_PATH}/movies"
+        "${STORAGE_PATH}/tv"
+        "${FUSE_MOUNT}"
+    )
+
+    for d in "${root_dirs[@]}"; do
+        if mkdir -p "$d" 2>/dev/null; then
+            chown "${SYSTEM_USER}:${SYSTEM_USER}" "$d" 2>/dev/null || true
+            print_ok "Created: $d"
+        else
+            print_info "Creating ${d} requires sudo..."
+            sudo mkdir -p "$d"
+            sudo chown "${SYSTEM_USER}:${SYSTEM_USER}" "$d"
+            print_ok "Created (sudo): $d"
+        fi
+    done
+}
+
+# ------------------------------------------------------------------------------
+# 5d. Install systemd service files
+# ------------------------------------------------------------------------------
+install_services() {
+    print_info "Installing systemd service files (requires sudo)..."
+
+    # -- gostream.service --
+    sudo tee /etc/systemd/system/gostream.service > /dev/null <<SERVICE_EOF
+[Unit]
+Description=GoStream Unified Engine (GoStorm + FUSE Proxy)
+After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+# Memory tuning — GOMEMLIMIT=${GOMEMLIMIT_MB}MiB is optimal for Pi 4 / 4GB
+Environment=GOMEMLIMIT=${GOMEMLIMIT_MB}MiB
+Environment=GOGC=100
+
+Type=simple
+User=${SYSTEM_USER}
+Group=${SYSTEM_USER}
+
+WorkingDirectory=${INSTALL_DIR}
+
+# Wait for DNS before starting (required for tracker + blocklist resolution)
+ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5; do nslookup www.google.com >/dev/null 2>&1 && exit 0 || sleep 2; done; exit 1'
+
+# FUSE mount cleanup and creation
+ExecStartPre=-/usr/bin/${FUSERMOUNT_CMD} -uz ${FUSE_MOUNT}
+ExecStartPre=/bin/mkdir -p ${FUSE_MOUNT}
+
+# Main binary — no CLI args needed:
+#   --path defaults to WorkingDirectory (${INSTALL_DIR})
+#   physical_source_path and fuse_mount_path are read from config.json
+ExecStart=${INSTALL_DIR}/gostream
+
+# Allow gostream to stabilize, then restart Samba so it sees the FUSE mount
+ExecStartPost=/bin/sleep 2
+ExecStartPost=/usr/bin/sudo /bin/systemctl restart smbd
+
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+LimitNPROC=4096
+
+StandardOutput=append:${BASE_DIR}/logs/gostream.log
+StandardError=append:${BASE_DIR}/logs/gostream.log
+
+# Cleanly unmount FUSE on stop
+ExecStop=/usr/bin/${FUSERMOUNT_CMD} -uz ${FUSE_MOUNT}
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+    print_ok "Wrote /etc/systemd/system/gostream.service"
+
+    # -- health-monitor.service --
+    sudo tee /etc/systemd/system/health-monitor.service > /dev/null <<HEALTHSVC_EOF
+[Unit]
+Description=GoStorm Health Monitor Dashboard
+After=network.target gostream.service
+
+[Service]
+Type=simple
+User=${SYSTEM_USER}
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=/usr/bin/python3 ${INSTALL_DIR}/scripts/health-monitor.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+HEALTHSVC_EOF
+
+    print_ok "Wrote /etc/systemd/system/health-monitor.service"
+}
+
+# ------------------------------------------------------------------------------
+# 5e. Enable services via systemd
+# ------------------------------------------------------------------------------
+enable_services() {
+    print_info "Reloading systemd and enabling services..."
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable gostream health-monitor
+
+    print_ok "Services enabled: gostream, health-monitor"
+}
+
+# ------------------------------------------------------------------------------
+# 5f. Verify installation (non-fatal — binary may not be deployed yet)
+# ------------------------------------------------------------------------------
+verify_install() {
+    print_info "Verifying installation (checking metrics endpoint)..."
+
+    local url="http://127.0.0.1:${METRICS_PORT}/metrics"
+    if command -v curl >/dev/null 2>&1; then
+        if curl -sf --max-time 5 "$url" >/dev/null 2>&1; then
+            print_ok "GoStream metrics endpoint is reachable at ${url}"
+        else
+            print_warn "GoStream is not running yet (metrics endpoint not reachable)."
+            print_warn "This is expected if the binary has not been copied and started."
+        fi
+    else
+        print_warn "curl not available — skipping endpoint verification."
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Check that binary exists in INSTALL_DIR (warn-only)
+# ------------------------------------------------------------------------------
+check_binary() {
+    local binary="${INSTALL_DIR}/gostream"
+    if [ -f "$binary" ] && [ -x "$binary" ]; then
+        print_ok "Binary found: ${binary}"
+    else
+        print_warn "Binary not found at ${binary}."
+        print_warn "You must copy the compiled binary before starting the service."
+    fi
+}
+
+# ==============================================================================
+# Final summary
+# ==============================================================================
+show_summary() {
+    echo ""
+    echo "${BOLD}${GREEN}╔══════════════════════════════════════╗${NC}"
+    echo "${BOLD}${GREEN}║  Installation Complete!              ║${NC}"
+    echo "${BOLD}${GREEN}╚══════════════════════════════════════╝${NC}"
+    echo ""
+    echo "  Configuration written to:"
+    echo "    ${BOLD}${INSTALL_DIR}/config.json${NC}"
+    echo ""
+    echo "  Service files installed:"
+    echo "    /etc/systemd/system/gostream.service"
+    echo "    /etc/systemd/system/health-monitor.service"
+    echo ""
+    echo "${BOLD}Next steps:${NC}"
+    echo ""
+    echo "  1. Copy the compiled binary:"
+    echo "     ${YELLOW}cp gostream ${INSTALL_DIR}/gostream${NC}"
+    echo "     ${YELLOW}chmod +x ${INSTALL_DIR}/gostream${NC}"
+    echo ""
+    echo "  2. Start services:"
+    echo "     ${YELLOW}sudo systemctl start gostream health-monitor${NC}"
+    echo ""
+    echo "  3. Check status:"
+    echo "     ${YELLOW}sudo systemctl status gostream${NC}"
+    echo "     ${YELLOW}curl http://127.0.0.1:${METRICS_PORT}/metrics${NC}"
+    echo ""
+    echo "  4. Dashboard:"
+    echo "     ${BOLD}http://<your-ip>:${DASHBOARD_PORT}${NC}  (Health Monitor)"
+    echo "     ${BOLD}http://<your-ip>:${METRICS_PORT}/control${NC}  (GoStream Control Panel)"
+    echo ""
+    echo "  5. Sync scripts (run manually or via cron):"
+    echo "     ${YELLOW}python3 ${INSTALL_DIR}/scripts/gostorm-sync-complete.py${NC}  # Movies"
+    echo "     ${YELLOW}python3 ${INSTALL_DIR}/scripts/gostorm-tv-sync.py${NC}         # TV"
+    echo "     ${YELLOW}python3 ${INSTALL_DIR}/scripts/plex-watchlist-sync.py${NC}     # Watchlist"
+    echo ""
+    echo "  6. Logs:"
+    echo "     ${YELLOW}tail -f ${BASE_DIR}/logs/gostream.log${NC}"
+    echo ""
+}
+
+# ==============================================================================
+# Main
+# ==============================================================================
+main() {
+    show_banner
+
+    # Note: FUSERMOUNT_CMD is set inside check_prerequisites
+    FUSERMOUNT_CMD="fusermount3"
+
+    check_prerequisites
+
+    collect_paths
+    collect_plex
+    collect_apis
+    collect_hardware
+
+    print_header "[5/5] Installing"
+
+    generate_config_json
+    echo ""
+    install_python_deps
+    echo ""
+    create_directories
+    echo ""
+    install_services
+    echo ""
+    enable_services
+    echo ""
+    check_binary
+    echo ""
+    verify_install
+
+    show_summary
+}
+
+main "$@"

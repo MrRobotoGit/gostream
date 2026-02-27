@@ -1,0 +1,25 @@
+# Real config with credentials — use config.json.example as template
+config.json
+
+# PGO profile (machine-specific, can be 100MB+)
+default.pgo
+
+# Runtime state
+logs/
+STATE/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Compiled binary
+gostream

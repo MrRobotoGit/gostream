@@ -1,0 +1,18 @@
+[Unit]
+Description=GoStorm Health Monitor Dashboard
+After=network.target gostream.service
+
+[Service]
+Type=simple
+# Change User to the account that owns the install directory
+User=pi
+# Change to your GoStream install directory
+WorkingDirectory=/home/pi/GoStream
+ExecStart=/usr/bin/python3 /home/pi/GoStream/scripts/health-monitor.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=5
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

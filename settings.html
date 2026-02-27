@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="it">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoStream Dashboard - Control Panel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --text: #1e293b;
+            --muted: #64748b;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
+            --border: #e2e8f0;
+            --success: #10b981;
+            --error: #ef4444;
+            --warning: #f59e0b;
+            --section-bg: #fcfcfd;
+            --section-border: #f1f5f9;
+            --input-bg: #ffffff;
+            --switch-off: #cbd5e1;
+        }
+
+        [data-theme="dark"] {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #60a5fa;
+            --border: #334155;
+            --section-bg: #1a2332;
+            --section-border: #2d3b4e;
+            --input-bg: #0f172a;
+            --switch-off: #475569;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 30px 20px;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid var(--border);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 800;
+            color: var(--accent);
+        }
+
+        h1 span {
+            font-weight: 300;
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .theme-btn {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: 0.2s;
+        }
+
+        .theme-btn:hover {
+            border-color: var(--accent);
+        }
+
+        .mode-toggle {
+            display: flex;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .mode-toggle button {
+            border: none;
+            background: none;
+            padding: 6px 14px;
+            cursor: pointer;
+            color: var(--muted);
+            transition: 0.2s;
+        }
+
+        .mode-toggle button.active {
+            background: var(--accent);
+            color: white;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1.5fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 1100px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: 14px;
+            padding: 22px;
+            box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.06);
+            border: 1px solid var(--border);
+            transition: background 0.3s;
+        }
+
+        h2 {
+            margin: 0 0 18px;
+            font-size: 16px;
+            font-weight: 700;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .form-section {
+            margin-bottom: 16px;
+            background: var(--section-bg);
+            padding: 14px;
+            border-radius: 10px;
+            border: 1px solid var(--section-border);
+            transition: background 0.3s;
+        }
+
+        .form-section.advanced {
+            display: none;
+        }
+
+        .form-section.advanced.show {
+            display: block;
+        }
+
+        .form-section-title {
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 12px;
+            letter-spacing: 0.5px;
+            border-left: 3px solid var(--accent);
+            padding-left: 10px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        @media (max-width: 600px) {
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .form-group {
+            margin-bottom: 8px;
+        }
+
+        #gostorm-form .form-group {
+            margin-bottom: 22px;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        select {
+            width: 100%;
+            height: 38px;
+            padding: 0 10px;
+            border: 1.5px solid var(--border);
+            border-radius: 6px;
+            font-size: 14px;
+            background: var(--input-bg);
+            color: var(--text);
+            transition: border-color 0.2s;
+        }
+
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Range Slider */
+        .range-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .range-group input[type="range"] {
+            flex: 1;
+            height: 6px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: var(--border);
+            border-radius: 3px;
+            outline: none;
+            border: none;
+            padding: 0;
+        }
+
+        .range-group input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+        }
+
+        .range-group input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            border: none;
+        }
+
+        .range-val {
+            min-width: 52px;
+            text-align: center;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--accent);
+            background: var(--section-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 4px 6px;
+        }
+
+        input.warn {
+            border-color: var(--warning) !important;
+            background: rgba(245, 158, 11, 0.06);
+        }
+
+        input.danger {
+            border-color: var(--error) !important;
+            background: rgba(239, 68, 68, 0.06);
+        }
+
+        .switch-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+            gap: 10px;
+            margin-top: 4px;
+        }
+
+        .switch-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 7px 10px;
+            background: var(--card);
+            border: 1px solid var(--section-border);
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--muted);
+            transition: border-color 0.2s;
+        }
+
+        .switch-item:hover {
+            border-color: var(--border);
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 34px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background: var(--switch-off);
+            transition: .3s;
+            border-radius: 18px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 12px;
+            width: 12px;
+            left: 3px;
+            bottom: 3px;
+            background: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked+.slider {
+            background: var(--accent);
+        }
+
+        input:checked+.slider:before {
+            transform: translateX(16px);
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-top: 8px;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn-restart {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border: none;
+            border-radius: 8px;
+            background: #7f1d1d;
+            color: white;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-restart:hover {
+            background: #991b1b;
+        }
+
+        .btn-restart:disabled {
+            background: #4b5563;
+            cursor: default;
+        }
+
+        .status-msg {
+            margin-top: 12px;
+            padding: 8px;
+            border-radius: 8px;
+            font-size: 12px;
+            display: none;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        .status-success {
+            display: block;
+            background: #ecfdf5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+
+        .status-error {
+            display: block;
+            background: #fef2f2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+
+        [data-theme="dark"] .status-success {
+            background: #064e3b;
+            color: #6ee7b7;
+            border-color: #065f46;
+        }
+
+        [data-theme="dark"] .status-error {
+            background: #450a0a;
+            color: #fca5a5;
+            border-color: #991b1b;
+        }
+
+        .hint {
+            font-size: 11px;
+            color: var(--muted);
+            margin-top: 2px;
+        }
+
+        .live-badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-left: auto;
+        }
+
+        .live-badge.running {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        [data-theme="dark"] .live-badge.running {
+            background: #14532d;
+            color: #86efac;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>GoStream <span>Control</span></h1>
+            <div class="header-controls">
+                <button class="btn-restart" id="btn-restart" onclick="restartGoStream()">Restart</button>
+                <div class="mode-toggle">
+                    <button class="active" onclick="setMode('simple')">Simple</button>
+                    <button onclick="setMode('advanced')">Advanced</button>
+                </div>
+                <button class="theme-btn" onclick="toggleTheme()" title="Toggle Dark Mode">🌓</button>
+            </div>
+        </header>
+
+        <div class="grid">
+            <!-- ENGINE SETTINGS (GoStream config.json) -->
+            <div class="card">
+                <h2>⚙️ GoStream FUSE <span class="live-badge running">Running</span></h2>
+                <form id="gostream-form">
+                    <div class="form-section">
+                        <div class="form-section-title">Core & Streaming</div>
+                        <div class="form-grid">
+                            <div class="form-group" style="grid-column: 1 / -1;">
+                                <label>ReadAhead Budget (MB)</label>
+                                <div class="range-group">
+                                    <input type="range" name="read_ahead_budget_mb" min="64" max="512" step="32">
+                                    <span class="range-val" data-for="read_ahead_budget_mb">256 MB</span>
+                                </div>
+                                <div class="hint">RAM for raCache pre-read buffer</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Master Concurrency</label>
+                                <input type="number" name="master_concurrency_limit" min="5" max="100"
+                                    data-warn-below="10" data-warn-above="50">
+                                <div class="hint">Global concurrent data request slots</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Max Streaming Slots</label>
+                                <input type="number" name="max_concurrent_streaming">
+                                <div class="hint">Reserved slots for active playback</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Streaming Threshold (KB)</label>
+                                <input type="number" name="streaming_threshold_kb">
+                                <div class="hint">Min request size to activate stream mode</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <div class="form-section-title">Paths</div>
+                        <div class="form-grid">
+                            <div class="form-group" style="grid-column: 1 / -1;">
+                                <label>Physical Source Path</label>
+                                <input type="text" name="physical_source_path" placeholder="/mnt/torrserver">
+                                <div class="hint">Directory containing the real .mkv files. Overrides the CLI argument —
+                                    requires service restart.</div>
+                            </div>
+                            <div class="form-group" style="grid-column: 1 / -1;">
+                                <label>FUSE Mount Path</label>
+                                <input type="text" name="fuse_mount_path" placeholder="/mnt/torrserver-go">
+                                <div class="hint">FUSE virtual mount point exposed to Samba/Plex. Overrides the CLI
+                                    argument — requires service restart.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section advanced">
+                        <div class="form-section-title">FUSE Timing & Buffers</div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Read Buffer (KB)</label>
+                                <input type="number" name="read_buffer_size_kb">
+                                <div class="hint">OS read buffer (Samba: 1024)</div>
+                            </div>
+                            <div class="form-group">
+                                <label>FUSE Block (Bytes)</label>
+                                <input type="number" name="fuse_block_size_bytes">
+                                <div class="hint">FUSE block size (Samba Turbo: 1048576)</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Attr Timeout (s)</label>
+                                <input type="number" step="0.1" name="attr_timeout_seconds">
+                                <div class="hint">File attribute cache validity</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Entry Timeout (s)</label>
+                                <input type="number" step="0.1" name="entry_timeout_seconds">
+                                <div class="hint">Directory entry cache validity</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section advanced">
+                        <div class="form-section-title">Cache Management</div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Metadata Cache (MB)</label>
+                                <input type="number" name="metadata_cache_size_mb">
+                                <div class="hint">LRU metadata cache size</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Max Cache Entries</label>
+                                <input type="number" name="max_cache_entries">
+                                <div class="hint">Max files in metadata cache</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Cleanup Interval (min)</label>
+                                <input type="number" name="cache_cleanup_interval_min">
+                                <div class="hint">Auto-cleanup frequency</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section advanced">
+                        <div class="form-section-title">NAT-PMP (WireGuard)</div>
+                        <div class="switch-item" style="margin-bottom: 12px;">
+                            <span>Enable NAT-PMP</span>
+                            <label class="switch"><input type="checkbox" name="natpmp_enabled"
+                                    data-nested="natpmp.enabled" onchange="updateNatPmpState()"><span
+                                    class="slider"></span></label>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Gateway IP</label>
+                                <input type="text" name="natpmp_gateway" data-nested="natpmp.gateway">
+                                <div class="hint">VPN gateway (e.g. 10.2.0.1)</div>
+                            </div>
+                            <div class="form-group">
+                                <label>VPN Interface</label>
+                                <input type="text" name="natpmp_interface" data-nested="natpmp.vpn_interface">
+                                <div class="hint">WireGuard interface (e.g. wg0)</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Refresh (s)</label>
+                                <input type="number" name="natpmp_refresh" data-nested="natpmp.refresh">
+                            </div>
+                            <div class="form-group">
+                                <label>Lifetime (s)</label>
+                                <input type="number" name="natpmp_lifetime" data-nested="natpmp.lifetime">
+                            </div>
+                            <div class="form-group">
+                                <label>Local Port</label>
+                                <input type="number" name="natpmp_port" data-nested="natpmp.local_port">
+                            </div>
+                        </div>
+                    </div>
+
+
+
+                    <div class="form-section advanced">
+                        <div class="form-section-title">Connectivity & Rescue</div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>GoStorm URL</label>
+                                <input type="text" name="gostorm_url">
+                            </div>
+                            <div class="form-group">
+                                <label>Rescue Grace (s)</label>
+                                <input type="number" name="rescue_grace_period_seconds">
+                            </div>
+                            <div class="form-group">
+                                <label>Rescue Cooldown (h)</label>
+                                <input type="number" name="rescue_cooldown_hours">
+                            </div>
+                            <div class="form-group">
+                                <label>Metrics Port</label>
+                                <input type="number" name="metrics_port">
+                            </div>
+                            <div class="form-group">
+                                <label>Log Level</label>
+                                <select name="log_level">
+                                    <option value="INFO">INFO</option>
+                                    <option value="DEBUG">DEBUG</option>
+                                    <option value="ERROR">ERROR</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Proxy Port</label>
+                                <input type="number" name="proxy_listen_port">
+                            </div>
+                            <div class="form-group" style="grid-column: 1 / -1;">
+                                <label>IP BlockList URL</label>
+                                <input type="text" name="blocklist_url"
+                                    placeholder="https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz">
+                                <div class="hint">Block malicious/anti-P2P peers automatically</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Save Engine Config</button>
+                    <div id="gostream-status" class="status-msg"></div>
+                </form>
+            </div>
+
+            <!-- CORE SETTINGS (GoStorm) -->
+            <div class="card">
+                <h2>⚡ GoStorm Engine<span class="live-badge running">Live</span></h2>
+                <form id="gostorm-form">
+                    <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 16px;">
+                        <div>
+                            <div class="form-section">
+                                <div class="form-section-title">Cache & Data</div>
+                                <div class="form-group">
+                                    <label>Cache Size (MB)</label>
+                                    <div class="range-group">
+                                        <input type="range" name="cacheSize" min="16" max="256" step="16">
+                                        <span class="range-val" data-for="cacheSize">64</span>
+                                    </div>
+                                    <div class="hint">GoStorm piece buffer (feeds raCache)</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Readahead Cache (%)</label>
+                                    <div class="range-group">
+                                        <input type="range" name="readerReadAHead" min="10" max="95" step="5">
+                                        <span class="range-val" data-for="readerReadAHead">50</span>
+                                    </div>
+                                    <div class="hint">% of CacheSize for piece readahead</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Preload Cache (%)</label>
+                                    <div class="range-group">
+                                        <input type="range" name="preloadCache" min="0" max="100" step="5">
+                                        <span class="range-val" data-for="preloadCache">0</span>
+                                    </div>
+                                    <div class="hint">Pre-fill before playback start</div>
+                                </div>
+                            </div>
+
+                            <div class="form-section">
+                                <div class="form-section-title">Warmup & SSD</div>
+                                <div class="form-group">
+                                    <div class="switch-item" style="margin-bottom: 8px; font-weight: 500;">
+                                        <span>Use Warmup Cache</span>
+                                        <label class="switch"><input type="checkbox" name="useDisk"><span
+                                                class="slider"></span></label>
+                                    </div>
+                                    <input type="text" name="torrentsSavePath">
+                                    <div class="hint">Warmup files path</div>
+                                </div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>SSD Quota (GB)</label>
+                                        <input type="number" name="disk_warmup_quota_gb">
+                                        <div class="hint">SSD space for warmup cache</div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Head Warmup (MB)</label>
+                                        <input type="number" name="warmup_head_size_mb">
+                                        <div class="hint">Per-file head cache on SSD</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-section">
+                                <div class="form-section-title">Swarm Limits</div>
+                                <div class="form-group">
+                                    <label>Connections Limit</label>
+                                    <input type="number" name="connectionsLimit" data-warn-above="50">
+                                    <div class="hint">Max peers per torrent</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>DL Rate (KB/s)</label>
+                                    <input type="number" name="downloadRateLimit" min="0" placeholder="0 = unlimited">
+                                </div>
+                                <div class="form-group">
+                                    <label>UP Rate (KB/s)</label>
+                                    <input type="number" name="uploadRateLimit" min="0" placeholder="0 = unlimited">
+                                </div>
+                                <div class="form-group advanced">
+                                    <label>Disconnect Timeout (s)</label>
+                                    <input type="number" name="torrentDisconnectTimeout">
+                                    <div class="hint">Timeout for inactive torrent disconnection</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="form-section">
+                                <div class="form-section-title">Network & Protocol</div>
+                                <div class="form-group advanced">
+                                    <label>Listen Port</label>
+                                    <input type="number" name="peersListenPort" id="peersListenPort">
+                                    <div class="hint" id="peersListenPort-hint">Peer port (0 = random)</div>
+                                </div>
+                                <div class="form-group advanced">
+                                    <label>Retrackers Mode</label>
+                                    <select name="retrackersMode">
+                                        <option value="0">Don't add</option>
+                                        <option value="1">Add</option>
+                                        <option value="2">Remove</option>
+                                        <option value="3">Replace</option>
+                                    </select>
+                                    <div class="hint">Manage retracker in torrents</div>
+                                </div>
+                                <div class="switch-grid">
+                                    <div class="switch-item">
+                                        <div><span>Enable IPv6</span>
+                                            <div class="hint">Enable IPv6 support</div>
+                                        </div><label class="switch"><input type="checkbox" name="enableIPv6"><span
+                                                class="slider"></span></label>
+                                    </div>
+                                    <div class="switch-item">
+                                        <div><span>Enable DHT</span>
+                                            <div class="hint">Peer discovery without tracker</div>
+                                        </div><label class="switch"><input type="checkbox" name="disableDHT"><span
+                                                class="slider"></span></label>
+                                    </div>
+                                    <div class="switch-item">
+                                        <div><span>Enable PEX</span>
+                                            <div class="hint">Peer exchange between clients</div>
+                                        </div><label class="switch"><input type="checkbox" name="disablePEX"><span
+                                                class="slider"></span></label>
+                                    </div>
+                                    <div class="switch-item">
+                                        <div><span>Enable TCP</span>
+                                            <div class="hint">Protocol TCP for peers</div>
+                                        </div><label class="switch"><input type="checkbox" name="disableTCP"><span
+                                                class="slider"></span></label>
+                                    </div>
+                                    <div class="switch-item">
+                                        <div><span>Enable uTP</span>
+                                            <div class="hint">Protocol uTP (UDP)</div>
+                                        </div><label class="switch"><input type="checkbox" name="disableUTP"><span
+                                                class="slider"></span></label>
+                                    </div>
+                                    <div class="switch-item">
+                                        <div><span>Enable Upload</span>
+                                            <div class="hint">Allow sending data to peers</div>
+                                        </div><label class="switch"><input type="checkbox" name="disableUpload"><span
+                                                class="slider"></span></label>
+                                    </div>
+                                    <div class="switch-item">
+                                        <div><span>Force Encrypt</span>
+                                            <div class="hint">Force encrypted connections</div>
+                                        </div><label class="switch"><input type="checkbox" name="forceEncrypt"><span
+                                                class="slider"></span></label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-section">
+                                <div class="form-section-title">Behaviors</div>
+                                <div class="switch-grid">
+                                    <div class="switch-item">
+                                        <div><span>Smart Responsive Mode</span>
+                                            <div class="hint">Allows playback quick start. In case of a burst
+                                                of corrupted frames, it temporarily returns to Strict Mode.</div>
+                                        </div><label class="switch"><input type="checkbox" name="responsiveMode"><span
+                                                class="slider"></span></label>
+                                    </div>
+
+                                    <div class="switch-item advanced">
+                                        <div><span>Debug Log</span>
+                                            <div class="hint">Enable detailed server logging</div>
+                                        </div><label class="switch"><input type="checkbox" name="enableDebug"><span
+                                                class="slider"></span></label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Apply All Core Settings</button>
+                    <div id="gostorm-status" class="status-msg"></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Restart ---
+        async function restartGoStream() {
+            const btn = document.getElementById('btn-restart');
+            if (!confirm('Restart gostream? The service will be unavailable for a few seconds.')) return;
+            btn.disabled = true;
+            btn.textContent = 'Restarting…';
+            try {
+                await fetch('/api/restart', { method: 'POST' });
+            } catch (_) { /* expected: connection drops on restart */ }
+            // Poll until back up
+            const poll = setInterval(async () => {
+                try {
+                    const r = await fetch('/api/config', { signal: AbortSignal.timeout(2000) });
+                    if (r.ok) {
+                        clearInterval(poll);
+                        btn.disabled = false;
+                        btn.textContent = 'Restart';
+                    }
+                } catch (_) { }
+            }, 1500);
+        }
+
+        // --- NAT-PMP state → Listen Port readonly ---
+        function updateNatPmpState() {
+            const enabled = document.querySelector('[name="natpmp_enabled"]')?.checked;
+            const portInput = document.getElementById('peersListenPort');
+            const portHint = document.getElementById('peersListenPort-hint');
+            if (!portInput) return;
+            portInput.readOnly = enabled;
+            portInput.style.opacity = enabled ? '0.5' : '1';
+            portHint.textContent = enabled
+                ? 'Peer port managed by NAT-PMP when enabled'
+                : 'Peer port (0 = random)';
+            portHint.style.color = enabled ? '#b45309' : '';
+        }
+
+        // --- Theme (OS auto-detect + manual override) ---
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const next = current === 'dark' ? '' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('gs-theme', next || 'light');
+        }
+        (function () {
+            const saved = localStorage.getItem('gs-theme');
+            if (saved) {
+                document.documentElement.setAttribute('data-theme', saved === 'dark' ? 'dark' : '');
+            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+
+        // --- Simple / Advanced ---
+        function setMode(mode) {
+            document.querySelectorAll('.mode-toggle button').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+            document.querySelectorAll('.advanced').forEach(el => {
+                el.classList.toggle('show', mode === 'advanced');
+            });
+            localStorage.setItem('gs-mode', mode);
+        }
+        (function () { const m = localStorage.getItem('gs-mode'); if (m === 'advanced') { document.querySelectorAll('.advanced').forEach(el => el.classList.add('show')); } })();
+
+        // --- Value Warnings ---
+        function attachWarnings() {
+            document.querySelectorAll('[data-warn-below], [data-warn-above]').forEach(input => {
+                input.addEventListener('input', () => {
+                    const v = parseFloat(input.value);
+                    const lo = parseFloat(input.dataset.warnBelow);
+                    const hi = parseFloat(input.dataset.warnAbove);
+                    input.classList.remove('warn', 'danger');
+                    if (!isNaN(lo) && v < lo) input.classList.add('danger');
+                    else if (!isNaN(hi) && v > hi) input.classList.add('warn');
+                });
+            });
+        }
+        attachWarnings();
+
+        // --- Range Sliders ---
+        document.querySelectorAll('.range-group input[type="range"]').forEach(slider => {
+            const label = slider.parentElement.querySelector('.range-val');
+            const suffix = slider.name.includes('_mb') || slider.name === 'cacheSize' ? ' MB' : '%';
+            slider.addEventListener('input', () => { label.textContent = slider.value + suffix; });
+        });
+
+        // --- GoStream Logic ---
+        let originalEngine = {};
+        const ENGINE_ROOT_KEYS = [
+            'physical_source_path', 'fuse_mount_path',
+            'master_concurrency_limit', 'max_concurrent_streaming', 'read_ahead_budget_mb',
+            'streaming_threshold_kb', 'read_buffer_size_kb', 'write_buffer_size_kb',
+            'fuse_block_size_bytes', 'attr_timeout_seconds', 'entry_timeout_seconds',
+            'negative_timeout_seconds', 'metadata_cache_size_mb', 'max_cache_entries',
+            'cache_cleanup_interval_min', 'http_client_timeout_seconds', 'max_retry_attempts',
+            'retry_delay_ms', 'gostorm_url', 'rescue_grace_period_seconds',
+            'rescue_cooldown_hours', 'metrics_port', 'disk_warmup_quota_gb',
+            'warmup_head_size_mb', 'log_level', 'proxy_listen_port', 'blocklist_url'
+        ];
+
+        async function loadEngine() {
+            try {
+                const res = await fetch('/api/config');
+                originalEngine = await res.json();
+                const form = document.getElementById('gostream-form');
+                ENGINE_ROOT_KEYS.forEach(k => {
+                    const input = document.querySelector(`[name="${k}"]`);
+                    if (input) {
+                        input.value = originalEngine[k];
+                        const label = document.querySelector(`[data-for="${k}"]`);
+                        if (label) {
+                            const suffix = k.includes('_mb') ? ' MB' : '%';
+                            label.textContent = originalEngine[k] + suffix;
+                        }
+                    }
+                });
+                const n = originalEngine.NatPMP || originalEngine.natpmp;
+                if (n) {
+                    form.querySelector('[data-nested="natpmp.gateway"]').value = n.Gateway || n.gateway || "";
+                    form.querySelector('[data-nested="natpmp.vpn_interface"]').value = n.VPNInterface || n.vpn_interface || "";
+                    form.querySelector('[data-nested="natpmp.refresh"]').value = n.Refresh || n.refresh || 0;
+                    form.querySelector('[data-nested="natpmp.lifetime"]').value = n.Lifetime || n.lifetime || 0;
+                    form.querySelector('[data-nested="natpmp.local_port"]').value = n.LocalPort || n.local_port || 0;
+                    form.querySelector('[data-nested="natpmp.enabled"]').checked = (n.Enabled !== undefined) ? n.Enabled : n.enabled;
+                    updateNatPmpState();
+                }
+            } catch (e) { console.error("Engine load error", e); }
+        }
+
+        document.getElementById('gostream-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const status = document.getElementById('gostream-status');
+            const formData = new FormData(e.target);
+            const data = { ...originalEngine };
+
+            ENGINE_ROOT_KEYS.forEach(k => {
+                let v = formData.get(k);
+
+                // If field is missing from form or empty string, skip it to preserve original/default
+                if (v === null || v === "") return;
+
+                if (k === 'log_level' || k === 'gostorm_url' || k === 'blocklist_url' ||
+                    k === 'physical_source_path' || k === 'fuse_mount_path') {
+                    data[k] = v;
+                } else if (k.includes('timeout_seconds')) {
+                    const parsed = parseFloat(v);
+                    if (!isNaN(parsed)) data[k] = parsed;
+                } else {
+                    const parsed = parseInt(v);
+                    if (!isNaN(parsed)) data[k] = parsed;
+                }
+            });
+
+            const natpmpKey = originalEngine.NatPMP ? 'NatPMP' : 'natpmp';
+            const oldNat = originalEngine[natpmpKey] || {};
+
+            // Helper to get NAT-PMP values safely
+            const getNatVal = (formName, jsonKey, isInt) => {
+                const v = formData.get(formName);
+                if (v === null || v === "") return oldNat[jsonKey];
+                return isInt ? parseInt(v) : v;
+            };
+
+            data[natpmpKey] = {
+                gateway: getNatVal('natpmp_gateway', 'gateway', false),
+                vpn_interface: getNatVal('natpmp_interface', 'vpn_interface', false),
+                refresh: getNatVal('natpmp_refresh', 'refresh', true),
+                lifetime: getNatVal('natpmp_lifetime', 'lifetime', true),
+                local_port: getNatVal('natpmp_port', 'local_port', true),
+                enabled: formData.has('natpmp_enabled')
+            };
+
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            status.textContent = res.ok ? "✓ Config saved — restart gostream to apply" : "✗ Save error";
+            status.className = "status-msg " + (res.ok ? "status-success" : "status-error");
+            setTimeout(() => { status.className = "status-msg"; }, 5000);
+        };
+
+        // --- TorrServer Logic ---
+        const NEGATIVE_KEYS = ["DisableDHT", "DisablePEX", "DisableTCP", "DisableUTP", "DisableUpload"];
+        let originalCore = {};
+
+        async function loadCore() {
+            try {
+                const res = await fetch('http://' + window.location.hostname + ':8090/settings', {
+                    method: 'POST',
+                    body: JSON.stringify({ action: 'get' }),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                originalCore = await res.json();
+                const form = document.getElementById('gostorm-form');
+                const csVal = Math.round(originalCore.CacheSize / (1024 * 1024));
+                form.querySelector('[name="cacheSize"]').value = csVal;
+                form.querySelector('[data-for="cacheSize"]').textContent = csVal + ' MB';
+                form.querySelector('[name="readerReadAHead"]').value = originalCore.ReaderReadAHead;
+                form.querySelector('[data-for="readerReadAHead"]').textContent = originalCore.ReaderReadAHead + '%';
+                form.querySelector('[name="preloadCache"]').value = originalCore.PreloadCache;
+                form.querySelector('[data-for="preloadCache"]').textContent = originalCore.PreloadCache + '%';
+                form.querySelector('[name="downloadRateLimit"]').value = originalCore.DownloadRateLimit ? Math.round(originalCore.DownloadRateLimit / 1024) : '';
+                form.querySelector('[name="uploadRateLimit"]').value = originalCore.UploadRateLimit ? Math.round(originalCore.UploadRateLimit / 1024) : '';
+                form.querySelector('[name="connectionsLimit"]').value = originalCore.ConnectionsLimit;
+                form.querySelector('[name="peersListenPort"]').value = originalCore.PeersListenPort;
+                form.querySelector('[name="torrentDisconnectTimeout"]').value = originalCore.TorrentDisconnectTimeout;
+                form.querySelector('[name="torrentsSavePath"]').value = originalCore.TorrentsSavePath;
+                form.querySelector('[name="retrackersMode"]').value = originalCore.RetrackersMode;
+                const allToggleKeys = ["ResponsiveMode", "UseDisk", "EnableIPv6", "DisableUTP", "DisableDHT", "DisablePEX", "DisableTCP", "DisableUpload", "ForceEncrypt", "EnableDebug"];
+                allToggleKeys.forEach(k => {
+                    const formKey = k.charAt(0).toLowerCase() + k.slice(1);
+                    const input = form.querySelector(`[name="${formKey}"]`);
+                    if (input) input.checked = NEGATIVE_KEYS.includes(k) ? !originalCore[k] : originalCore[k];
+                });
+                // Trigger warnings after load
+                document.querySelectorAll('[data-warn-below], [data-warn-above]').forEach(i => i.dispatchEvent(new Event('input')));
+            } catch (e) { console.error("Core load error", e); }
+        }
+
+        document.getElementById('gostorm-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const status = document.getElementById('gostorm-status');
+            const formData = new FormData(e.target);
+            const sets = { ...originalCore };
+            sets.CacheSize = parseInt(formData.get('cacheSize')) * 1024 * 1024;
+            sets.ReaderReadAHead = parseInt(formData.get('readerReadAHead'));
+            sets.PreloadCache = parseInt(formData.get('preloadCache'));
+            sets.DownloadRateLimit = (parseInt(formData.get('downloadRateLimit')) || 0) * 1024;
+            sets.UploadRateLimit = (parseInt(formData.get('uploadRateLimit')) || 0) * 1024;
+            sets.ConnectionsLimit = parseInt(formData.get('connectionsLimit'));
+            sets.PeersListenPort = parseInt(formData.get('peersListenPort'));
+            sets.TorrentDisconnectTimeout = parseInt(formData.get('torrentDisconnectTimeout'));
+            sets.TorrentsSavePath = formData.get('torrentsSavePath');
+            sets.RetrackersMode = parseInt(formData.get('retrackersMode'));
+            const allToggleKeys = ["ResponsiveMode", "UseDisk", "EnableIPv6", "DisableUTP", "DisableDHT", "DisablePEX", "DisableTCP", "DisableUpload", "ForceEncrypt", "EnableDebug"];
+            allToggleKeys.forEach(k => {
+                const formKey = k.charAt(0).toLowerCase() + k.slice(1);
+                const isUIOn = formData.has(formKey);
+                sets[k] = NEGATIVE_KEYS.includes(k) ? !isUIOn : isUIOn;
+            });
+            const res = await fetch('http://' + window.location.hostname + ':8090/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'set', sets: sets })
+            });
+            status.textContent = res.ok ? "✓ Core settings applied (live)" : "✗ Apply error";
+            status.className = "status-msg " + (res.ok ? "status-success" : "status-error");
+            setTimeout(() => { status.className = "status-msg"; }, 5000);
+            if (res.ok) loadCore();
+        };
+
+        loadEngine();
+        loadCore();
+    </script>
+</body>
+
+</html>
