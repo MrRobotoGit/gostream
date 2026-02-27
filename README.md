@@ -207,8 +207,8 @@ GoStorm is a fork of anacrolix/torrent v1.55 + TorrServer, with substantial modi
 ## Quick Install
 
 ```bash
-git clone https://github.com/MrRobotoGit/gostream GoStream_Src
-cd GoStream_Src
+git clone https://github.com/MrRobotoGit/gostream gostream
+cd gostream
 chmod +x install.sh
 ./install.sh
 ```
@@ -392,16 +392,16 @@ Capture a CPU profile during real streaming workload:
 
 ```bash
 # Single profile (120 seconds while streaming a 4K film)
-curl -o /home/pi/GoStream_Src/default.pgo \
+curl -o /home/pi/gostream/default.pgo \
   "http://127.0.0.1:8096/debug/pprof/profile?seconds=120"
 
 # Or merge multiple workloads for better coverage
 curl -o /tmp/pgo-stream.pprof "http://127.0.0.1:8096/debug/pprof/profile?seconds=120"
 curl -o /tmp/pgo-sync.pprof   "http://127.0.0.1:8096/debug/pprof/profile?seconds=120"
-go tool pprof -proto /tmp/pgo-stream.pprof /tmp/pgo-sync.pprof > /home/pi/GoStream_Src/default.pgo
+go tool pprof -proto /tmp/pgo-stream.pprof /tmp/pgo-sync.pprof > /home/pi/gostream/default.pgo
 
 # Rebuild â€” Go detects the changed profile and re-optimizes automatically
-cd /home/pi/GoStream_Src
+cd /home/pi/gostream
 GOARCH=arm64 CGO_ENABLED=1 /usr/local/go/bin/go build -pgo=auto -o gostream .
 ```
 
@@ -654,7 +654,7 @@ Compile natively on Pi 4 (arm64). Do not cross-compile from another architecture
 
 ```bash
 ssh pi@192.168.1.2
-cd /home/pi/GoStream_Src
+cd /home/pi/gostream
 
 /usr/local/go/bin/go clean -cache
 /usr/local/go/bin/go mod tidy
@@ -825,8 +825,8 @@ Regenerating the PGO profile with a fresh live workload typically reduces CPU 5â
 | `/home/pi/GoStream/gostream` | Production binary |
 | `/home/pi/GoStream/config.json` | Live configuration |
 | `/home/pi/GoStream/scripts/` | Python sync and monitor scripts |
-| `/home/pi/GoStream_Src/` | Go source code |
-| `/home/pi/GoStream_Src/default.pgo` | PGO profile for next build |
+| `/home/pi/gostream/` | Go source code |
+| `/home/pi/gostream/default.pgo` | PGO profile for next build |
 | `/home/pi/STATE/` | Inode map, warmup cache |
 | `/home/pi/logs/gostream.log` | Main service log |
 | `/mnt/gostream-mkv-virtual/` | FUSE mount point |
