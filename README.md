@@ -14,6 +14,8 @@ The project is not a media center or a download manager. It is a **streaming fil
 - [Requirements](#requirements)
 - [Quick Install](#quick-install)
 - [How-To Guide](#how-to-guide)
+- [GoStream Control Panel](#gostream-control-panel)
+- [Health Monitor Dashboard](#health-monitor-dashboard)
 - [Configuration Reference](#configuration-reference)
 - [Sync Scripts](#sync-scripts)
 - [Plex and Samba Setup](#plex-and-samba-setup)
@@ -407,6 +409,104 @@ Regenerate the profile after significant code changes or when CPU usage changes 
 
 ---
 
+## GoStream Control Panel
+
+The Control Panel is a web UI **embedded in the GoStream binary** — no additional server, no React build step, no external dependencies. It is served directly at `:8096/control` alongside the metrics and webhook endpoints.
+
+```
+http://<your-pi-ip>:8096/control
+```
+
+### Simple / Advanced Mode
+
+A toggle in the top-right corner switches between two views:
+
+- **Simple**: Shows the most frequently changed settings — read-ahead budget, concurrency, cache size, paths, and NAT-PMP toggle.
+- **Advanced**: Exposes all tunable parameters, split into labelled groups across two panels.
+
+### GoStream FUSE Panel (left)
+
+Settings in this panel are written to `config.json` and require a **service restart** to take effect. The **Save Engine Config** button persists the values; the **Restart** button in the header triggers an immediate service restart.
+
+| Group | Settings |
+|-------|----------|
+| **Core & Streaming** | ReadAhead Budget (MB) — slider for the 256 MB in-memory pre-read buffer; Master Concurrency — global request slots (matches Samba thread ceiling); Max Streaming Slots — reserved slots for active playback; Streaming Threshold (KB) — min request size to activate stream mode |
+| **Paths** | Physical Source Path — directory containing the real `.mkv` stub files (Samba source root); FUSE Mount Path — the virtual filesystem mount point exposed to Samba and Plex |
+| **FUSE Timing & Buffers** | Read Buffer (KB) — OS-level read buffer size (1024 KB = Samba Turbo); FUSE Block Size (bytes) — 1 MB block aligns FUSE with Samba transfer units; Attr Timeout / Entry Timeout (s) — FUSE kernel cache validity for file attributes and directory entries |
+| **Cache Management** | Metadata Cache (MB) — LRU cache size for file/torrent metadata; Max Cache Entries — file count cap for the metadata cache; Cleanup Interval (min) — frequency of the inode GC pass |
+| **Connectivity & Rescue** | GoStorm URL — internal API address; Rescue Grace (s) — seconds before a non-responsive GoStorm triggers a rescue restart (240 s default); Rescue Cooldown (h) — minimum interval between rescues (24 h); Metrics Port; Log Level (INFO/DEBUG); Proxy Port; IP BlockList URL |
+
+### GoStorm Engine Panel (right)
+
+Settings in this panel are pushed to GoStorm **live via API** — no restart needed. The **Apply All Core Settings** button sends the current values to GoStorm immediately.
+
+| Group | Settings |
+|-------|----------|
+| **Cache & Data** | Cache Size (MB) — GoStorm piece buffer that feeds the FUSE read-ahead cache; Readahead Cache (%) — percentage of CacheSize reserved for piece pre-read (75%); Preload Cache (%) — pre-fill before playback starts (0% recommended — warmup cache makes this redundant) |
+| **Warmup & SSD** | Use Warmup Cache — enable/disable the two-layer SSD warmup; Warmup files path — where the `.warmup` binary files are stored; SSD Quota (GB) — LRU eviction cap (32 GB ≈ 150 films); Head Warmup (MB) — per-file head cache size (64 MB) |
+| **Swarm Limits** | Connections Limit — max simultaneous peers per torrent (30); DL Rate / UP Rate (KB/s) — 0 = unlimited; Disconnect Timeout (s) — idle peer expiry (30 s) |
+| **Network & Protocol** | Listen Port — peer inbound port (shown in orange if managed by NAT-PMP; do not edit manually when NAT-PMP is active); Retrackers Mode (Add/Replace/None); Enable IPv6 / DHT / PEX / TCP / uTP / Upload / Force Encrypt |
+| **NAT-PMP (WireGuard)** | Enable toggle; Gateway IP (e.g., `10.2.0.1`); VPN Interface (`wg0`); Refresh (s) — how often to renew the port mapping (45 s); Lifetime (s) — requested mapping duration (60 s); Local Port — GoStorm listen port on the Pi (8091) |
+| **Behaviors** | Smart Responsive Mode — enables Adaptive Shield (serves unverified pieces instantly; auto-reverts to Strict on corruption); Debug Log — enables verbose server-side logging |
+
+---
+
+## Health Monitor Dashboard
+
+The Health Monitor is a standalone Python service (`health-monitor.py`) running on port **`:8095`**. It provides a live operational view of the entire stack.
+
+```
+http://<your-pi-ip>:8095
+```
+
+### Status Grid
+
+Six cards in a 2×3 grid give an at-a-glance view of every layer:
+
+| Card | What it shows |
+|------|--------------|
+| **GOSTORM** | API ping latency in milliseconds (green = responding). Restart button triggers GoStorm restart. |
+| **FUSE MOUNT** | Number of virtual `.mkv` files currently exposed via the FUSE mount. Confirms the filesystem is mounted and populated. Restart button remounts FUSE. |
+| **VPN (WG0)** | WireGuard interface status: current VPN IP and gateway address. Red if the interface is down. |
+| **NAT-PMP** | Active external port currently assigned by the VPN gateway (e.g., `:44012`). Updates automatically when the port is renewed. Restart button re-triggers port mapping. |
+| **PLEX** | Plex Media Server version and reachability. Restart button restarts the Plex service. |
+| **SYSTEM** | CPU %, RAM %, and free disk space — live readings via `psutil`. |
+
+### Download Speed Graph
+
+A **15-minute rolling chart** of GoStorm download speed in Mbps. The chart samples every few seconds and scrolls automatically. Peaks reflect burst behaviour during initial piece discovery; the plateau reflects steady-state streaming speed (194 Mbps in the example above with an AMZN WEB-DL torrent).
+
+### Torrents Panel
+
+Shows the current torrent swarm state:
+
+- **Active** — torrents currently in RAM with active peers (not just in the database)
+- **Total** — all torrents in the GoStorm database
+- **Peers / Seeders** — aggregate peer counts across all active torrents
+- **FUSE Buffer bar** — Active % (read-ahead buffer currently in use) vs. Latent % (allocated but idle). A fully-blue bar (100% Active) means the entire 256 MB budget is committed to active reads — normal during fast-seeder playback.
+
+### Active Stream Panel
+
+Appears automatically when a file is being streamed. Shows:
+
+- **Movie poster** fetched from TMDB
+- **Title + year + file size** (e.g., *The Long Walk (2025) — 19.7 GB*)
+- **Quality badges**: `PRIORITY` (Plex webhook received, priority mode active), `4K`, `DV` (Dolby Vision), `ATMOS`, `HDR10+`
+- **LIVE** indicator + **5-minute average speed** (e.g., 207.3 Mbps/avg)
+- **Source indicator**: `Proxy RAM` (data served from in-memory read-ahead cache) or `Warmup SSD` (served from disk cache)
+- **Peer and seeder count** for the active torrent
+
+### Sync Controls
+
+Two panels at the bottom allow manual sync execution without SSH:
+
+- **MOVIES SYNC** — triggers `gostorm-sync-complete.py`. Status shows `Idle` when not running, `Running` with a live log stream when active. Start button is disabled during an active run to prevent concurrent execution.
+- **TV SYNC** — triggers `gostorm-tv-sync.py`. Same Start/Idle behaviour.
+
+Live script output is streamed directly to the dashboard via server-sent events (SSE) — no need to tail a log file manually.
+
+---
+
 ## Configuration Reference
 
 `config.json` is always resolved relative to the binary's own path (`os.Executable()`). No path argument is needed at runtime. The file is not tracked by git (it contains credentials). Use `config.json.example` as the starting template:
@@ -501,14 +601,7 @@ python3 scripts/health-monitor.py
 # or: sudo systemctl start health-monitor
 ```
 
-Dashboard at `http://<pi-ip>:8095`:
-
-- **Status cards**: GoStorm engine, FUSE mount, NAT-PMP external port, VPN connectivity, system CPU/RAM/disk
-- **Speed graph**: 15-minute rolling download speed history
-- **Active stream panel**: poster art, title, quality badges (4K / DV / HDR / Atmos), 5-minute average download speed
-- **Library sync controls**: manual trigger with live progress output
-- **Smart Preloader**: detects watch progress above 90% (scrobble threshold) and preloads the next episode (128 MB warmup)
-- **Log viewer**: real-time tail of all service logs with filtering
+Real-time operational dashboard at `http://<pi-ip>:8095`. See [Health Monitor Dashboard](#health-monitor-dashboard) for the full description with panel-by-panel breakdown.
 
 ---
 
