@@ -552,7 +552,7 @@ install_python_deps() {
 
     # --break-system-packages is required on Debian 12+ / Raspberry Pi OS Bookworm
     # This is intentional: the Pi is a single-purpose server, not a shared system.
-    local pip_flags="--quiet --break-system-packages"
+    local pip_flags="--quiet --break-system-packages --no-warn-script-location"
 
     if [ -f "$req_file" ]; then
         pip3 install -r "$req_file" $pip_flags
