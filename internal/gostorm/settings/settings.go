@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"gostream/internal/gostorm/log"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
 )
 
 // Add a global lock for database operations during migration

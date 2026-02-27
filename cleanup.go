@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"gostream/internal/gostorm/torr"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr"
 )
 
 // CleanupManager provides periodic cleanup of various in-memory structures

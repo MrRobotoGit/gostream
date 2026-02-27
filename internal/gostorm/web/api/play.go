@@ -7,9 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gostream/internal/gostorm/torr"
-	"gostream/internal/gostorm/torr/state"
-	"gostream/internal/gostorm/web/api/utils"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/state"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/web/api/utils"
 )
 
 // play godoc

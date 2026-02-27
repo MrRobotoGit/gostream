@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gostream/internal/gostorm/torr/state"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/state"
 )
 
 var extVideo = map[string]interface{}{

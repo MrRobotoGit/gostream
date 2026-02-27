@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"gostream/internal/gostorm/log"
-	"gostream/internal/gostorm/settings"
-	"gostream/internal/gostorm/web"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/settings"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/web"
 )
 
 func Start() {

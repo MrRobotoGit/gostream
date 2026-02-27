@@ -2,23 +2,23 @@ package torr
 
 import (
 	"errors"
-	"gostream/internal/gostorm/torrshash"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torrshash"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
 
-	utils2 "gostream/internal/gostorm/utils"
+	utils2 "github.com/MrRobotoGit/gostream/internal/gostorm/utils"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 
-	"gostream/internal/gostorm/log"
-	"gostream/internal/gostorm/settings"
-	"gostream/internal/gostorm/torr/state"
-	cacheSt "gostream/internal/gostorm/torr/storage/state"
-	"gostream/internal/gostorm/torr/storage/torrstor"
-	"gostream/internal/gostorm/torr/utils"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/settings"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/state"
+	cacheSt "github.com/MrRobotoGit/gostream/internal/gostorm/torr/storage/state"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/storage/torrstor"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/utils"
 )
 
 type Torrent struct {

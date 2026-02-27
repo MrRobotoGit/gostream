@@ -1,4 +1,4 @@
-module gostream
+module github.com/MrRobotoGit/gostream
 
 go 1.24.0
 

@@ -10,9 +10,9 @@ import (
 
 	"github.com/anacrolix/torrent"
 
-	"gostream/internal/gostorm/log"
-	"gostream/internal/gostorm/settings"
-	"gostream/internal/gostorm/torr/storage/state"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/settings"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/storage/state"
 
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"

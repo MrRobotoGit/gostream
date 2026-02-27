@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"mime/multipart"
-	"gostream/internal/gostorm/torrshash"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torrshash"
 	"net/http"
 	"net/url"
 	"runtime"

@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gostream/internal/gostorm/settings"
-	"gostream/internal/gostorm/torr"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/settings"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr"
 
 	natpmp "github.com/jackpal/go-nat-pmp"
 )

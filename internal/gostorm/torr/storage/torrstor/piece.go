@@ -7,8 +7,8 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/storage"
 
-	"gostream/internal/gostorm/log"
-	"gostream/internal/gostorm/settings"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/settings"
 )
 
 var (

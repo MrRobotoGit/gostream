@@ -6,9 +6,9 @@ import (
 	"io"
 	"net/http"
 
-	"gostream/internal/gostorm/torr"
-	"gostream/internal/gostorm/torr/state"
-	apiUtils "gostream/internal/gostorm/web/api/utils"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr"
+	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/state"
+	apiUtils "github.com/MrRobotoGit/gostream/internal/gostorm/web/api/utils"
 	"log"
 	"sync"
 	"sync/atomic"
