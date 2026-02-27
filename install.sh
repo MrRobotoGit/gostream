@@ -729,19 +729,41 @@ verify_install() {
 # 5f2. Install Go toolchain if missing or wrong architecture
 # ------------------------------------------------------------------------------
 GO_BIN=""
+GO_ARCH=""
+GO_OS=""
+
+detect_go_arch() {
+    local machine
+    machine="$(uname -m)"
+    GO_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+
+    case "$machine" in
+        aarch64|arm64)    GO_ARCH="arm64"   ;;
+        x86_64|amd64)     GO_ARCH="amd64"   ;;
+        armv7l|armv7)     GO_ARCH="arm"     ;;
+        armv6l|armv6)     GO_ARCH="armv6l"  ;;
+        i686|i386)        GO_ARCH="386"     ;;
+        *)
+            print_err "Unsupported architecture: ${machine}"
+            exit 1
+            ;;
+    esac
+
+    print_info "Detected platform: ${GO_OS}/${GO_ARCH}"
+}
 
 ensure_go() {
-    local required_version="1.24.0"
     local go_install_dir="/usr/local/go"
 
-    # Find an existing Go binary
-    local candidates=("${go_install_dir}/bin/go" "/usr/local/go/bin/go" "$(command -v go 2>/dev/null)")
+    detect_go_arch
+
+    # Find an existing Go binary that matches the detected OS/arch
+    local candidates=("${go_install_dir}/bin/go" "$(command -v go 2>/dev/null)")
     for candidate in "${candidates[@]}"; do
         if [ -x "$candidate" ]; then
-            # Must be linux/arm64
             local info
             info=$("$candidate" version 2>/dev/null)
-            if echo "$info" | grep -q "linux/arm64"; then
+            if echo "$info" | grep -q "${GO_OS}/${GO_ARCH}"; then
                 GO_BIN="$candidate"
                 print_ok "Go found: $info"
                 return 0
@@ -749,14 +771,21 @@ ensure_go() {
         fi
     done
 
-    # Not found or wrong arch — download and install
-    print_info "Go ${required_version} (linux/arm64) not found — downloading..."
+    # Fetch the latest stable Go version number from go.dev
+    local go_version
+    go_version=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
+    if [ -z "$go_version" ]; then
+        go_version="go1.24.0"   # fallback if network unavailable
+    fi
 
-    local tarball="go${required_version}.linux-arm64.tar.gz"
+    print_info "${go_version} (${GO_OS}/${GO_ARCH}) not found — downloading..."
+
+    local tarball="${go_version}.${GO_OS}-${GO_ARCH}.tar.gz"
     local url="https://go.dev/dl/${tarball}"
     local tmp="/tmp/${tarball}"
 
     curl -fL --progress-bar -o "$tmp" "$url"
+    sudo rm -rf /usr/local/go
     sudo tar -C /usr/local -xzf "$tmp"
     rm -f "$tmp"
 
@@ -795,8 +824,8 @@ compile_binary() {
         print_info "No PGO profile — building with -pgo=off (regenerate later for 5-7% CPU gain)"
     fi
 
-    print_info "Building binary..."
-    GOARCH=arm64 CGO_ENABLED=1 "$GO_BIN" build ${pgo_flag} -o "${out_bin}" .
+    print_info "Building binary (GOARCH=${GO_ARCH})..."
+    GOARCH="${GO_ARCH}" CGO_ENABLED=1 "$GO_BIN" build ${pgo_flag} -o "${out_bin}" .
 
     chmod +x "${out_bin}"
     print_ok "Binary compiled and deployed: ${out_bin}"
