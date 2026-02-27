@@ -33,8 +33,6 @@ GoStream fuses BitTorrent and Plex into a single seamless experience. Add a film
 
 ## 📸 Screenshots
 
-![Health Monitor — Speed graph, torrents, active stream](docs/screenshots/health_monitor_2.png)
-
 ![Health Monitor — Status grid and sync controls](docs/screenshots/health_monitor_1.png)
 
 ![GoStream Control Panel — overview](docs/screenshots/control_1.png)
