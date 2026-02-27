@@ -1,8 +1,12 @@
 # GoStream
 
-**GoStream** is a unified Go binary that combines a stripped, heavily-patched BitTorrent engine (GoStorm) with a FUSE virtual filesystem, exposing active torrents as seekable `.mkv` files over Samba to Plex Media Server. Built for 24/7 production on a Raspberry Pi 4 (arm64, 4 GB RAM), it achieves warm-start playback in **0.1–0.5 seconds** with CPU usage under 23% of one core during 4K HDR streaming.
+**GoStream** is a custom FUSE virtual filesystem and BitTorrent streaming engine built as a single Go binary. It exposes active torrents as fully seekable `.mkv` files on the filesystem — no downloads, no intermediate files, no HTTP proxy. Plex sees a normal directory of MKV files backed by a Samba share; GoStream handles everything underneath.
 
-The project is not a media center or a download manager. It is a **streaming filesystem engine**: torrents are never fully downloaded. Instead, GoStream reads exactly the bytes Plex requests, in the order they are requested, using a multi-layer cache and a zero-network in-process data path.
+The FUSE layer is not a generic userspace filesystem wrapper. It is purpose-built around torrent streaming: each `.mkv` file is a virtual object whose bytes are resolved on demand from a live BitTorrent swarm, a two-layer SSD warmup cache, and a 256 MB in-memory read-ahead buffer. The BitTorrent engine (GoStorm — a stripped and heavily modified fork of anacrolix/torrent + TorrServer) runs **in the same process** as the FUSE layer and communicates via an in-memory `io.Pipe()`. There is no TCP socket, no HTTP stack, no serialization on the data path.
+
+Seeking in a multi-gigabyte torrent-backed file is a hard problem: the streaming pump must be interrupted atomically, the download position repositioned, and new peers requested — all within the latency budget of a Plex seek event. GoStream solves this with a coordinated four-stage seek architecture (pump interrupt → reactive jump → tail probe detection → pump survival) that handles forward jumps, rewinds, and MKV Cue probes as distinct cases.
+
+Built for 24/7 production on a Raspberry Pi 4 (arm64, 4 GB RAM): warm-start playback in **0.1–0.5 s**, CPU under 23% of one core at 4K HDR, peak throughput 200+ Mbps.
 
 ---
 
