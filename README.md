@@ -69,11 +69,11 @@ GoStream runs as a **single process**. The GoStorm BitTorrent engine and the FUS
 
 ## Unique Technical Features
 
-### 1. Zero-Network Native Bridge (V226+)
+### 1. Zero-Network Native Bridge
 
 The FUSE proxy and GoStorm engine run in the same OS process. When Plex reads a `.mkv` byte range, the FUSE layer calls directly into the GoStorm engine via an in-memory `io.Pipe()`. There is no TCP round-trip, no HTTP header parsing, no serialization. This eliminates the network RTT that causes stuttering in HTTP-based torrent streaming proxies on constrained hardware.
 
-### 2. Two-Layer SSD Warmup Cache (V256)
+### 2. Two-Layer SSD Warmup Cache
 
 - **Head cache**: The first 64 MB of each file is written to SSD on first play. Repeat time-to-first-frame (TTFF): **less than 0.01 seconds** (SSD at 150–200 MB/s, versus 2–4 seconds for torrent activation from cold).
 - **Tail cache**: The last 16 MB of each file is cached separately. MKV files store their Cues (seek index) near the end. Without tail cache, Plex probes the end of the file before confirming playback and the seek bar renders as unavailable.
@@ -81,7 +81,7 @@ The FUSE proxy and GoStorm engine run in the same OS process. When Plex reads a 
 - **Auto-population**: Plex library scans read the first 1 MB of every file. This is enough to populate the warmup head cache for every title in the library automatically — no manual warming step needed.
 - **Storage**: `{install_dir}/STATE/warmup/`
 
-### 3. Plex Webhook Integration and Smart Streaming (V253+, V281)
+### 3. Plex Webhook Integration and Smart Streaming
 
 GoStream embeds a webhook receiver at `:8096/plex-webhook`. When Plex sends a `media.play` event:
 
@@ -90,14 +90,14 @@ GoStream embeds a webhook receiver at `:8096/plex-webhook`. When Plex sends a `m
 3. The tail warmup is frozen: the MKV Cues segment is not evicted while the film is playing.
 4. On `media.stop`, GoStream triggers a fast-drop: the torrent retention window shrinks from 60 seconds to 10 seconds, freeing peers immediately.
 
-The IMDB-ID matching approach (V281) also solves a localization problem: Plex sends titles in the user's display language (e.g., `"den stygge stesøsteren"` instead of `"The Ugly Stepsister"`). Fuzzy title matching fails on translated titles. IMDB ID matching is language-independent.
+The IMDB-ID matching approach also solves a localization problem: Plex sends titles in the user's display language (e.g., `"den stygge stesøsteren"` instead of `"The Ugly Stepsister"`). Fuzzy title matching fails on translated titles. IMDB ID matching is language-independent.
 
 **Configure the webhook in Plex**: Settings → Webhooks → Add Webhook:
 ```
 http://<your-pi-ip>:8096/plex-webhook
 ```
 
-### 4. Adaptive Responsive Shield (V302)
+### 4. Adaptive Responsive Shield
 
 GoStream reads in two modes:
 
@@ -106,17 +106,17 @@ GoStream reads in two modes:
 
 If a corrupt piece is detected at any point (`MarkNotComplete()`), the Adaptive Shield activates Strict Mode for **60 seconds**, then automatically restores Responsive Mode. The transition is tracked via an atomic boolean — no mutex contention on the hot read path.
 
-### 5. Seek-Master Architecture (V284–V288, V560)
+### 5. Seek-Master Architecture
 
 Accurate, low-latency seeking in large 4K files required four coordinated fixes:
 
 | Fix | What it does |
 |-----|-------------|
-| **V285** | Updates `lastOff` before the cache check, so the pump goroutine sees the seek target on the same `Read()` call, eliminating a one-round lag |
-| **V286** | `Interrupt()` closes the pipe reader atomically when the player jumps more than 256 MB. The pump goroutine is unblocked instantly from `io.ReadFull` — no polling, no sleep |
-| **V284** | Pump reactive jump: if the player is more than 256 MB ahead of the pump's current position, the pump snaps to `(playerOff / chunkSize) * chunkSize` |
-| **V288** | Pump survives `ErrInterrupted` by sleeping 200 ms and continuing the read loop rather than exiting, preventing premature goroutine termination |
-| **V560** | Tail probe detection: Plex probes the last N% of the file for MKV Cues before confirming playback. These reads are identified by byte range and served from the SSD tail cache without steering the pump to the end of the file |
+| **Eager offset update** | Updates `lastOff` before the cache check, so the pump goroutine sees the seek target on the same `Read()` call, eliminating a one-round lag |
+| **Atomic pipe interrupt** | `Interrupt()` closes the pipe reader atomically when the player jumps more than 256 MB. The pump goroutine is unblocked instantly from `io.ReadFull` — no polling, no sleep |
+| **Reactive jump** | If the player is more than 256 MB ahead of the pump's current position, the pump snaps to `(playerOff / chunkSize) * chunkSize` |
+| **Pump survival** | Pump survives `ErrInterrupted` by sleeping 200 ms and continuing the read loop rather than exiting, preventing premature goroutine termination |
+| **Tail probe detection** | Plex probes the last N% of the file for MKV Cues before confirming playback. These reads are identified by byte range and served from the SSD tail cache without steering the pump to the end of the file |
 
 ### 6. 32-Shard Read-Ahead Cache
 
@@ -137,7 +137,7 @@ Quality selection ladder (movies): `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMU
 
 Minimum seeders: 20 (main sync), 10 (watchlist sync, for older films).
 
-### 8. NAT-PMP Native VPN Port Forwarding (V228/V229)
+### 8. NAT-PMP Native VPN Port Forwarding
 
 Integrated as a sidecar goroutine. On startup (and periodically), GoStream requests a TCP+UDP port mapping from the WireGuard VPN gateway using the NAT-PMP protocol, installs `iptables PREROUTING REDIRECT` rules, and updates GoStorm's `PeersListenPort` when the external port changes — all without a service restart.
 
@@ -149,7 +149,7 @@ The effect on download speed is substantial:
 | WireGuard + NAT-PMP | 15–21 Mbps | 19–20 |
 | AMZN WEB-DL torrents | 140–198 Mbps | 23–25 |
 
-### 9. IP Blocklist — ~700k Ranges (V298)
+### 9. IP Blocklist — ~700k Ranges
 
 GoStream auto-downloads and periodically refreshes a gzipped BGP/country range blocklist. The blocklist is injected directly into anacrolix/torrent's IP filter, blocking known-bad actors before any connection attempt. Refresh interval: 24 hours.
 
@@ -164,13 +164,13 @@ GoStorm is a fork of anacrolix/torrent v1.55 + TorrServer, with substantial modi
 - **O(1) `AddTorrent` DB write**: The original implementation rewrote all torrents on every add (O(N) BoltDB fsync). With 520 torrents, each add caused 520 fsync operations (~1–2 seconds on SSD), which saturated the disk and caused `smbd` D-state during Plex scans. Fixed to a single `tdb.Set()` per modified torrent.
 - **O(1) `GetTorrentDB`**: The original called `ListTorrent()` (520 reads + 520 unmarshals) to find one torrent by hash. Fixed to direct key lookup.
 - **InfoBytes + PeerAddrs caching**: `TorrentSpec.InfoBytes` was never persisted to the database. Re-activation required a full metadata fetch. Now both InfoBytes and a snapshot of peer addresses are saved on `Wake()` — re-activation connects to known peers instantly with no metadata fetch.
-- **Request rebuild debounce (V278)**: The anacrolix torrent layer rebuilt its full piece request state on every received chunk — approximately 300 rebuilds/second. Debouncing to 60 rebuilds/second reduced CPU by 5x.
-- **O(1) `clearPriority` (V279)**: Originally iterated all ~512 cached pieces, acquiring the global lock per piece. Replaced with a `localPriority` map tracking only the ~25 currently-prioritized pieces.
+- **Request rebuild debounce**: The anacrolix torrent layer rebuilt its full piece request state on every received chunk — approximately 300 rebuilds/second. Debouncing to 60 rebuilds/second reduced CPU by 5x.
+- **O(1) `clearPriority`**: Originally iterated all ~512 cached pieces, acquiring the global lock per piece. Replaced with a `localPriority` map tracking only the ~25 currently-prioritized pieces.
 - **4 MB MemPiece buffer zeroing**: Channel-based buffer pools reuse memory without zeroing. When a piece is evicted and its buffer returned to the pool, the next piece to claim that buffer would contain stale data from a different file — causing forward-jump corruption in Responsive Mode. Fixed with `clear(p.buffer)` on pool reuse.
 - **raCache defensive copies**: The read-ahead cache's `Get()` previously returned a sub-slice of the pooled buffer. When the pool evicted and recycled the buffer, Plex received overwritten data. Fixed with defensive copies on both `Put()` and `Get()`.
-- **`cleanTrigger` panic fix (V280)**: `Cache.Close()` closed the `cleanTrigger` channel while background goroutines could still send to it, causing panics during peer upload. Fixed with a separate `cleanStop` channel.
+- **`cleanTrigger` panic fix**: `Cache.Close()` closed the `cleanTrigger` channel while background goroutines could still send to it, causing panics during peer upload. Fixed with a separate `cleanStop` channel.
 - **`PeekTorrent` discipline**: Read-only/monitoring endpoints that called `GetTorrent()` caused silent torrent activation loops. `health-monitor.py`'s `/cache` polling endpoint was activating and timing out 520 torrents in a loop. All monitoring paths now use `PeekTorrent()`.
-- **V302 InodeMap GC fix**: The inode cleanup routine built its `validFiles` set from active torrents only, which caused it to prune virtual MKV stubs every 5 minutes (529 files + directories). Each prune rebuilt all inodes, causing `smbd` D-state. Fixed to use `WalkDir(physicalSourcePath)` as the primary source.
+- **InodeMap GC fix**: The inode cleanup routine built its `validFiles` set from active torrents only, which caused it to prune virtual MKV stubs every 5 minutes (529 files + directories). Each prune rebuilt all inodes, causing `smbd` D-state. Fixed to use `WalkDir(physicalSourcePath)` as the primary source.
 - **8 additional race condition fixes**: Concurrent map writes, torn reads, nil pointer dereferences across `requesting.go`, `piece.go`, `cache.go`, and `apihelper.go`.
 
 ---
@@ -188,7 +188,7 @@ GoStorm is a fork of anacrolix/torrent v1.55 + TorrServer, with substantial modi
 | Memory footprint (read-ahead) | Deterministic 256 MB |
 | GOMEMLIMIT | 2200 MiB |
 | Peak throughput (NAT-PMP + fast seeder) | 200+ Mbps |
-| Plex scan peer count | ~6 total (was ~15,000 before V272 fix) |
+| Plex scan peer count | ~6 total (was ~15,000 before scanner-aware retention fix) |
 | Inode shard count | 32 (collision-protected) |
 | Warmup cache capacity | ~150 films at 64 MB each (32 GB quota) |
 
@@ -292,13 +292,13 @@ The script fetches popular films from TMDB, finds the best available torrent for
 
 When Plex seeks to a new timestamp:
 
-1. `Read()` is called at the new offset — `lastOff` is updated immediately (V285)
-2. If the jump exceeds 256 MB: `Interrupt()` closes the in-memory pipe (V286) — the pump goroutine unblocks from `io.ReadFull` atomically
-3. Pump detects that `lastOff` is more than 256 MB ahead of its current position — snaps to `(playerOff / chunkSize) * chunkSize` (V284)
+1. `Read()` is called at the new offset — `lastOff` is updated immediately
+2. If the jump exceeds 256 MB: `Interrupt()` closes the in-memory pipe — the pump goroutine unblocks from `io.ReadFull` atomically
+3. Pump detects that `lastOff` is more than 256 MB ahead of its current position — snaps to `(playerOff / chunkSize) * chunkSize`
 4. Pump restarts the stream via `startStream(newOff)` — GoStorm repositions its torrent reader
 5. Data arrives at the new position within seconds from peers or SSD cache
 
-The pump goroutine survives `ErrInterrupted` (V288) — it sleeps 200 ms and continues the read loop rather than exiting, so no goroutine restart overhead.
+The pump goroutine survives `ErrInterrupted` — it sleeps 200 ms and continues the read loop rather than exiting, so no goroutine restart overhead.
 
 ### Step 6 — Add from Your Plex Watchlist
 
@@ -334,7 +334,7 @@ open http://192.168.1.2:8095
 curl -s http://192.168.1.2:8096/metrics | python3 -m json.tool
 
 # Live log — key events only
-ssh pi@192.168.1.2 "tail -f /home/pi/logs/gostream.log | grep -E '(OPEN|NATIVE|V286|V284|DiskWarmup|Emergency)'"
+ssh pi@192.168.1.2 "tail -f /home/pi/logs/gostream.log | grep -E '(OPEN|NATIVE|Interrupt|Jump|DiskWarmup|Emergency)'"
 
 # Active torrents in RAM with speed
 curl -s -X POST -H 'Content-Type: application/json' \
@@ -386,7 +386,7 @@ curl -X POST http://127.0.0.1:8090/settings \
 |---------|-------|-----------|
 | `CacheSize` | 64 MB | Lean engine strategy — passes data up to the FUSE 256 MB buffer; smaller heap = lower GC pressure |
 | `ConnectionsLimit` | 25 | Matches the FUSE master semaphore; prevents Samba thread exhaustion |
-| `ResponsiveMode` | `true` | Serves unverified data for instant start; Adaptive Shield (V302) corrects corruption automatically |
+| `ResponsiveMode` | `true` | Serves unverified data for instant start; Adaptive Shield corrects corruption automatically |
 | `UseDisk` | `true` | Enables SSD warmup cache |
 | `TorrentDisconnectTimeout` | 10 s | Fast peer cleanup to control RAM footprint |
 
@@ -816,7 +816,7 @@ Profile the live binary:
 go tool pprof -top "http://127.0.0.1:8096/debug/pprof/profile?seconds=30"
 ```
 
-Expected hot paths: `sha1.blockGeneric` (hardware limitation on Pi 4 Cortex-A72, no crypto extensions), `io.ReadFull`, `sync.(*Mutex).Lock`. If `requesting.go` or `clearPriority` appear high, verify the V278/V279 patches are applied.
+Expected hot paths: `sha1.blockGeneric` (hardware limitation on Pi 4 Cortex-A72, no crypto extensions), `io.ReadFull`, `sync.(*Mutex).Lock`. If `requesting.go` or `clearPriority` appear high, verify the request-rebuild debounce and O(1) clearPriority patches are applied.
 
 Regenerating the PGO profile with a fresh live workload typically reduces CPU 5–7% additional.
 
