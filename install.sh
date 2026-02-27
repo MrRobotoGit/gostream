@@ -726,16 +726,82 @@ verify_install() {
 }
 
 # ------------------------------------------------------------------------------
-# Check that binary exists in INSTALL_DIR (warn-only)
+# 5f2. Install Go toolchain if missing or wrong architecture
 # ------------------------------------------------------------------------------
-check_binary() {
-    local binary="${INSTALL_DIR}/gostream"
-    if [ -f "$binary" ] && [ -x "$binary" ]; then
-        print_ok "Binary found: ${binary}"
-    else
-        print_warn "Binary not found at ${binary}."
-        print_warn "You must copy the compiled binary before starting the service."
+GO_BIN=""
+
+ensure_go() {
+    local required_version="1.24.0"
+    local go_install_dir="/usr/local/go"
+
+    # Find an existing Go binary
+    local candidates=("${go_install_dir}/bin/go" "/usr/local/go/bin/go" "$(command -v go 2>/dev/null)")
+    for candidate in "${candidates[@]}"; do
+        if [ -x "$candidate" ]; then
+            # Must be linux/arm64
+            local info
+            info=$("$candidate" version 2>/dev/null)
+            if echo "$info" | grep -q "linux/arm64"; then
+                GO_BIN="$candidate"
+                print_ok "Go found: $info"
+                return 0
+            fi
+        fi
+    done
+
+    # Not found or wrong arch — download and install
+    print_info "Go ${required_version} (linux/arm64) not found — downloading..."
+
+    local tarball="go${required_version}.linux-arm64.tar.gz"
+    local url="https://go.dev/dl/${tarball}"
+    local tmp="/tmp/${tarball}"
+
+    curl -fL --progress-bar -o "$tmp" "$url"
+    sudo tar -C /usr/local -xzf "$tmp"
+    rm -f "$tmp"
+
+    GO_BIN="${go_install_dir}/bin/go"
+    print_ok "Go installed: $($GO_BIN version)"
+}
+
+# ------------------------------------------------------------------------------
+# 5f3. Compile the GoStream binary from source
+# ------------------------------------------------------------------------------
+compile_binary() {
+    print_info "Compiling GoStream binary (this takes a few minutes on Pi 4)..."
+
+    ensure_go
+
+    local src_dir="${SCRIPT_DIR}"
+    local out_bin="${INSTALL_DIR}/gostream"
+
+    # Verify we have Go source files in the expected location
+    if [ ! -f "${src_dir}/main.go" ]; then
+        print_err "main.go not found in ${src_dir} — cannot compile."
+        exit 1
     fi
+
+    cd "${src_dir}"
+
+    print_info "Running go mod tidy..."
+    "$GO_BIN" mod tidy
+
+    # Use -pgo=off if no default.pgo present (fresh install)
+    local pgo_flag="-pgo=off"
+    if [ -f "${src_dir}/default.pgo" ]; then
+        pgo_flag="-pgo=auto"
+        print_info "PGO profile found — building with -pgo=auto"
+    else
+        print_info "No PGO profile — building with -pgo=off (regenerate later for 5-7% CPU gain)"
+    fi
+
+    print_info "Building binary..."
+    GOARCH=arm64 CGO_ENABLED=1 "$GO_BIN" build ${pgo_flag} -o "${out_bin}" .
+
+    chmod +x "${out_bin}"
+    print_ok "Binary compiled and deployed: ${out_bin}"
+
+    cd - >/dev/null
 }
 
 # ------------------------------------------------------------------------------
@@ -849,18 +915,14 @@ show_summary() {
     echo ""
     echo "${BOLD}Next steps:${NC}"
     echo ""
-    echo "  1. Copy the compiled binary:"
-    echo "     ${YELLOW}cp gostream ${INSTALL_DIR}/gostream${NC}"
-    echo "     ${YELLOW}chmod +x ${INSTALL_DIR}/gostream${NC}"
-    echo ""
-    echo "  2. Start services:"
+    echo "  1. Start services:"
     echo "     ${YELLOW}sudo systemctl start gostream health-monitor${NC}"
     echo ""
-    echo "  3. Configure Plex Webhook:"
+    echo "  2. Configure Plex Webhook:"
     echo "     Open Plex → Settings → Webhooks → Add:"
     echo "     ${BOLD}http://<your-pi-ip>:${METRICS_PORT}/plex-webhook${NC}"
     echo ""
-    echo "  4. Configure Samba (critical for stability):"
+    echo "  3. Configure Samba (critical for stability):"
     echo "     Edit /etc/samba/smb.conf and ensure your share has:"
     echo "       oplocks = no"
     echo "       aio read size = 1"
@@ -868,20 +930,20 @@ show_summary() {
     echo "       vfs objects = fileid"
     echo "     Then: ${YELLOW}sudo systemctl restart smbd${NC}"
     echo ""
-    echo "  5. Check status:"
+    echo "  4. Check status:"
     echo "     ${YELLOW}sudo systemctl status gostream${NC}"
     echo "     ${YELLOW}curl http://127.0.0.1:${METRICS_PORT}/metrics${NC}"
     echo ""
-    echo "  6. Dashboard:"
+    echo "  5. Dashboards:"
     echo "     ${BOLD}http://<your-ip>:${DASHBOARD_PORT}${NC}  (Health Monitor)"
     echo "     ${BOLD}http://<your-ip>:${METRICS_PORT}/control${NC}  (GoStream Control Panel)"
     echo ""
-    echo "  7. Sync scripts (run manually or via cron):"
+    echo "  6. Sync scripts (run manually or via cron):"
     echo "     ${YELLOW}python3 ${INSTALL_DIR}/scripts/gostorm-sync-complete.py${NC}  # Movies"
     echo "     ${YELLOW}python3 ${INSTALL_DIR}/scripts/gostorm-tv-sync.py${NC}         # TV"
     echo "     ${YELLOW}python3 ${INSTALL_DIR}/scripts/plex-watchlist-sync.py${NC}     # Watchlist"
     echo ""
-    echo "  8. Logs:"
+    echo "  7. Logs:"
     echo "     ${YELLOW}tail -f ${BASE_DIR}/logs/gostream.log${NC}"
     echo ""
 }
@@ -924,7 +986,7 @@ main() {
     echo ""
     setup_cron_jobs
     echo ""
-    check_binary
+    compile_binary
     echo ""
     verify_install
 
