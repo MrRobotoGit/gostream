@@ -417,6 +417,12 @@ The Control Panel is a web UI **embedded in the GoStream binary** — no additio
 http://<your-pi-ip>:8096/control
 ```
 
+![GoStream Control Panel — Simple mode](docs/screenshots/control_1.png)
+
+![GoStream Control Panel — Advanced mode (FUSE settings)](docs/screenshots/control_2.png)
+
+![GoStream Control Panel — Advanced mode (NAT-PMP, BlockList, Swarm)](docs/screenshots/control_3.png)
+
 ### Simple / Advanced Mode
 
 A toggle in the top-right corner switches between two views:
@@ -458,6 +464,10 @@ The Health Monitor is a standalone Python service (`health-monitor.py`) running 
 ```
 http://<your-pi-ip>:8095
 ```
+
+![Health Monitor — Status grid and sync controls](docs/screenshots/health_monitor_1.png)
+
+![Health Monitor — Speed graph, torrents, active stream](docs/screenshots/health_monitor_2.png)
 
 ### Status Grid
 
