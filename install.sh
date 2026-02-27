@@ -813,7 +813,7 @@ compile_binary() {
     cd "${src_dir}"
 
     print_info "Running go mod tidy..."
-    "$GO_BIN" mod tidy
+    GOTOOLCHAIN=local "$GO_BIN" mod tidy
 
     # Use -pgo=off if no default.pgo present (fresh install)
     local pgo_flag="-pgo=off"
@@ -825,7 +825,7 @@ compile_binary() {
     fi
 
     print_info "Building binary (GOARCH=${GO_ARCH})..."
-    GOARCH="${GO_ARCH}" CGO_ENABLED=1 "$GO_BIN" build ${pgo_flag} -o "${out_bin}" .
+    GOTOOLCHAIN=local GOARCH="${GO_ARCH}" CGO_ENABLED=1 "$GO_BIN" build ${pgo_flag} -o "${out_bin}" .
 
     chmod +x "${out_bin}"
     print_ok "Binary compiled and deployed: ${out_bin}"
