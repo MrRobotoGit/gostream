@@ -118,6 +118,7 @@ show_banner() {
     echo ""
     echo "  Unified Engine: GoStorm BitTorrent + FUSE Virtual Filesystem"
     echo "  Target:         Raspberry Pi 4 (arm64), 24/7 production"
+    echo "  Includes:       cron setup, sudoers, Plex webhook guide"
     echo ""
 }
 
@@ -656,6 +657,99 @@ check_binary() {
     fi
 }
 
+# ------------------------------------------------------------------------------
+# 5g. Sudoers entry so gostream.service can restart smbd without a password
+# ------------------------------------------------------------------------------
+setup_sudoers() {
+    print_info "Configuring sudoers for smbd restart..."
+
+    local sudoers_file="/etc/sudoers.d/gostream-smbd"
+    local sudoers_line="${SYSTEM_USER} ALL=(ALL) NOPASSWD: /bin/systemctl restart smbd"
+
+    # Check whether the entry already exists anywhere in sudoers
+    if sudo grep -qF "$sudoers_line" /etc/sudoers /etc/sudoers.d/* 2>/dev/null; then
+        print_ok "Sudoers entry already present — no change needed."
+        return 0
+    fi
+
+    if sudo sh -c "echo '${sudoers_line}' | tee ${sudoers_file} > /dev/null"; then
+        sudo chmod 440 "${sudoers_file}"
+        print_ok "Sudoers entry written: ${sudoers_file}"
+    else
+        print_warn "Could not write sudoers entry (sudo unavailable or permission denied)."
+        print_warn "To add manually, run:"
+        print_warn "  echo '${sudoers_line}' | sudo tee ${sudoers_file} && sudo chmod 440 ${sudoers_file}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 5h. Cron jobs for sync scripts (optional)
+# ------------------------------------------------------------------------------
+setup_cron_jobs() {
+    print_info "Setting up cron jobs for sync scripts..."
+
+    if ! ask_yn "Set up cron jobs for sync scripts?" "y"; then
+        print_info "Skipping cron job setup."
+        return 0
+    fi
+
+    local logs_dir="${BASE_DIR}/logs"
+
+    # Each entry: "schedule script logfile"
+    local -a cron_entries=(
+        "0 * * * * /usr/bin/python3 ${INSTALL_DIR}/scripts/plex-watchlist-sync.py >> ${logs_dir}/watchlist-sync.log 2>&1"
+        "0 3 * * * /usr/bin/python3 ${INSTALL_DIR}/scripts/gostorm-sync-complete.py >> ${logs_dir}/gostorm-debug.log 2>&1"
+        "0 4 * * 0 /usr/bin/python3 ${INSTALL_DIR}/scripts/gostorm-tv-sync.py >> ${logs_dir}/gostorm-tv-sync.log 2>&1"
+    )
+
+    # Script name substrings used for deduplication checks
+    local -a cron_markers=(
+        "plex-watchlist-sync.py"
+        "gostorm-sync-complete.py"
+        "gostorm-tv-sync.py"
+    )
+
+    # Decide whether to edit root's crontab (via sudo -u SYSTEM_USER) or current user
+    local crontab_cmd
+    if [ "$(id -u)" -eq 0 ]; then
+        crontab_cmd="crontab -u ${SYSTEM_USER}"
+    else
+        crontab_cmd="crontab"
+    fi
+
+    # Load existing crontab (gracefully handle empty/missing crontab)
+    local existing_crontab
+    existing_crontab=$(${crontab_cmd} -l 2>/dev/null || true)
+
+    local new_crontab="$existing_crontab"
+    local added=0
+
+    for i in "${!cron_entries[@]}"; do
+        local entry="${cron_entries[$i]}"
+        local marker="${cron_markers[$i]}"
+
+        if echo "$existing_crontab" | grep -qF "$marker"; then
+            print_warn "Cron entry for ${marker} already exists — skipping."
+        else
+            # Append a newline before the new entry if crontab is not empty
+            if [ -n "$new_crontab" ]; then
+                new_crontab="${new_crontab}"$'\n'"${entry}"
+            else
+                new_crontab="${entry}"
+            fi
+            print_ok "Cron added: ${entry}"
+            (( added++ )) || true
+        fi
+    done
+
+    if [ "$added" -gt 0 ]; then
+        echo "$new_crontab" | ${crontab_cmd} -
+        print_ok "${added} cron job(s) installed."
+    else
+        print_info "No new cron entries were needed."
+    fi
+}
+
 # ==============================================================================
 # Final summary
 # ==============================================================================
@@ -681,20 +775,32 @@ show_summary() {
     echo "  2. Start services:"
     echo "     ${YELLOW}sudo systemctl start gostream health-monitor${NC}"
     echo ""
-    echo "  3. Check status:"
+    echo "  3. Configure Plex Webhook:"
+    echo "     Open Plex → Settings → Webhooks → Add:"
+    echo "     ${BOLD}http://<your-pi-ip>:${METRICS_PORT}/plex-webhook${NC}"
+    echo ""
+    echo "  4. Configure Samba (critical for stability):"
+    echo "     Edit /etc/samba/smb.conf and ensure your share has:"
+    echo "       oplocks = no"
+    echo "       aio read size = 1"
+    echo "       deadtime = 15"
+    echo "       vfs objects = fileid"
+    echo "     Then: ${YELLOW}sudo systemctl restart smbd${NC}"
+    echo ""
+    echo "  5. Check status:"
     echo "     ${YELLOW}sudo systemctl status gostream${NC}"
     echo "     ${YELLOW}curl http://127.0.0.1:${METRICS_PORT}/metrics${NC}"
     echo ""
-    echo "  4. Dashboard:"
+    echo "  6. Dashboard:"
     echo "     ${BOLD}http://<your-ip>:${DASHBOARD_PORT}${NC}  (Health Monitor)"
     echo "     ${BOLD}http://<your-ip>:${METRICS_PORT}/control${NC}  (GoStream Control Panel)"
     echo ""
-    echo "  5. Sync scripts (run manually or via cron):"
+    echo "  7. Sync scripts (run manually or via cron):"
     echo "     ${YELLOW}python3 ${INSTALL_DIR}/scripts/gostorm-sync-complete.py${NC}  # Movies"
     echo "     ${YELLOW}python3 ${INSTALL_DIR}/scripts/gostorm-tv-sync.py${NC}         # TV"
     echo "     ${YELLOW}python3 ${INSTALL_DIR}/scripts/plex-watchlist-sync.py${NC}     # Watchlist"
     echo ""
-    echo "  6. Logs:"
+    echo "  8. Logs:"
     echo "     ${YELLOW}tail -f ${BASE_DIR}/logs/gostream.log${NC}"
     echo ""
 }
@@ -726,6 +832,10 @@ main() {
     install_services
     echo ""
     enable_services
+    echo ""
+    setup_sudoers
+    echo ""
+    setup_cron_jobs
     echo ""
     check_binary
     echo ""
