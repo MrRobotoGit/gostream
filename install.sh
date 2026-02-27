@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # GoStream Installer v1.4.4
-# Unified Engine (GoStorm + FUSE Proxy)
-# Target: Raspberry Pi 4 (arm64), 24/7 production
+# GoStream + GoStorm (Unified Engine)
+# Target: auto-detected at install time
 # ==============================================================================
 set -e
 
@@ -116,8 +116,8 @@ show_banner() {
     echo "${BOLD}${BLUE}║     GoStream Installer v1.4.4        ║${NC}"
     echo "${BOLD}${BLUE}╚══════════════════════════════════════╝${NC}"
     echo ""
-    echo "  Unified Engine: GoStorm BitTorrent + FUSE Virtual Filesystem"
-    echo "  Target:         Raspberry Pi 4 (arm64), 24/7 production"
+    echo "  GoStream + GoStorm — Unified BitTorrent + FUSE Streaming Engine"
+    echo "  Target:         $(uname -m) / $(uname -s), 24/7 production"
     echo "  Includes:       cron setup, sudoers, Plex webhook guide"
     echo ""
 }
@@ -622,7 +622,7 @@ install_services() {
     # -- gostream.service --
     sudo tee /etc/systemd/system/gostream.service > /dev/null <<SERVICE_EOF
 [Unit]
-Description=GoStream Unified Engine (GoStorm + FUSE Proxy)
+Description=GoStream + GoStorm (Unified Streaming Engine)
 After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target
 Wants=network-online.target
 StartLimitIntervalSec=0
