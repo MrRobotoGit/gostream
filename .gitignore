@@ -1,5 +1,7 @@
 # Real config with credentials — use config.json.example as template
 config.json
+CLAUDE.md
+GEMINI.md
 
 # PGO profile (machine-specific, can be 100MB+)
 default.pgo
