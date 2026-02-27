@@ -123,6 +123,43 @@ show_banner() {
 }
 
 # ==============================================================================
+# [0a] Auto-install system dependencies via apt
+# ==============================================================================
+install_system_deps() {
+    # Only run on Debian/Ubuntu-based systems
+    if ! command -v apt-get >/dev/null 2>&1; then
+        print_warn "apt-get not found — skipping automatic dependency installation."
+        print_warn "Please install manually: git python3-pip fuse3 curl samba"
+        return 0
+    fi
+
+    # Map: package name → apt package to install
+    local -A needed=()
+
+    command -v git         >/dev/null 2>&1 || needed["git"]="git"
+    command -v pip3        >/dev/null 2>&1 || needed["pip3"]="python3-pip"
+    command -v fusermount3 >/dev/null 2>&1 || needed["fusermount3"]="fuse3"
+    command -v curl        >/dev/null 2>&1 || needed["curl"]="curl"
+    command -v samba       >/dev/null 2>&1 || needed["samba"]="samba"
+
+    if [ "${#needed[@]}" -eq 0 ]; then
+        print_ok "All system dependencies already installed."
+        return 0
+    fi
+
+    print_header "Installing System Dependencies"
+    print_info "Missing packages: ${needed[*]}"
+    print_info "Running: sudo apt-get update && sudo apt-get install -y ${needed[*]}"
+    echo ""
+
+    sudo apt-get update -qq
+    sudo apt-get install -y "${needed[@]}"
+
+    echo ""
+    print_ok "System dependencies installed."
+}
+
+# ==============================================================================
 # [0] Prerequisite checks
 # ==============================================================================
 check_prerequisites() {
@@ -814,6 +851,7 @@ main() {
     # Note: FUSERMOUNT_CMD is set inside check_prerequisites
     FUSERMOUNT_CMD="fusermount3"
 
+    install_system_deps
     check_prerequisites
 
     collect_paths
