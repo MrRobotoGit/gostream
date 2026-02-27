@@ -385,14 +385,25 @@ collect_hardware() {
 # 5a. Generate config.json from config.json.example
 # ------------------------------------------------------------------------------
 generate_config_json() {
-    local example_path="${INSTALL_DIR}/config.json.example"
     local output_path="${INSTALL_DIR}/config.json"
+
+    # Ensure INSTALL_DIR exists before writing anything
+    mkdir -p "${INSTALL_DIR}"
+
+    # Look for config.json.example: first in the repo (SCRIPT_DIR), then in INSTALL_DIR
+    local example_path
+    if [ -f "${SCRIPT_DIR}/config.json.example" ]; then
+        example_path="${SCRIPT_DIR}/config.json.example"
+    else
+        example_path="${INSTALL_DIR}/config.json.example"
+    fi
 
     print_info "Generating config.json..."
 
     if [ ! -f "$example_path" ]; then
-        print_warn "config.json.example not found at ${example_path}"
-        print_warn "Generating config.json from built-in template instead."
+        print_warn "config.json.example not found — using built-in template."
+        example_path="${INSTALL_DIR}/config.json.example"
+        mkdir -p "${INSTALL_DIR}"
         # Write the embedded template so the python script below can update it
         cat > "$example_path" <<'TEMPLATE_EOF'
 {
@@ -500,6 +511,35 @@ print(f"  Written: {output_path}")
 PYEOF
 
     print_ok "config.json written to ${output_path}"
+}
+
+# ------------------------------------------------------------------------------
+# 5a2. Deploy files from repo to INSTALL_DIR
+# ------------------------------------------------------------------------------
+deploy_files() {
+    print_info "Deploying files to ${INSTALL_DIR}..."
+
+    mkdir -p "${INSTALL_DIR}/scripts"
+
+    # Copy scripts
+    if [ -d "${SCRIPT_DIR}/scripts" ]; then
+        cp -r "${SCRIPT_DIR}/scripts/." "${INSTALL_DIR}/scripts/"
+        print_ok "Scripts deployed to ${INSTALL_DIR}/scripts/"
+    else
+        print_warn "scripts/ directory not found in ${SCRIPT_DIR} — skipping."
+    fi
+
+    # Copy config.json.example (useful reference for the user)
+    if [ -f "${SCRIPT_DIR}/config.json.example" ]; then
+        cp "${SCRIPT_DIR}/config.json.example" "${INSTALL_DIR}/config.json.example"
+        print_ok "config.json.example deployed to ${INSTALL_DIR}/"
+    fi
+
+    # Copy requirements.txt
+    if [ -f "${SCRIPT_DIR}/requirements.txt" ]; then
+        cp "${SCRIPT_DIR}/requirements.txt" "${INSTALL_DIR}/requirements.txt"
+        print_ok "requirements.txt deployed to ${INSTALL_DIR}/"
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -848,6 +888,9 @@ show_summary() {
 main() {
     show_banner
 
+    # Directory containing this script (= cloned repo root)
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
     # Note: FUSERMOUNT_CMD is set inside check_prerequisites
     FUSERMOUNT_CMD="fusermount3"
 
@@ -861,6 +904,8 @@ main() {
 
     print_header "[5/5] Installing"
 
+    deploy_files
+    echo ""
     generate_config_json
     echo ""
     install_python_deps
