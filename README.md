@@ -37,10 +37,6 @@ GoStream fuses BitTorrent and Plex into a single seamless experience. Add a film
 
 ![GoStream Control Panel — overview](docs/screenshots/control_1.png)
 
-![GoStream Control Panel — Advanced settings](docs/screenshots/control_2.png)
-
-![GoStream Control Panel — NAT-PMP, BlockList, Swarm](docs/screenshots/control_3.png)
-
 ---
 
 ## 📖 Table of Contents
