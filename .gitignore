@@ -8,7 +8,7 @@ default.pgo
 
 # Runtime state
 logs/
-STATE/
+/STATE/
 *.log
 
 # Python
