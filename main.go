@@ -134,10 +134,11 @@ var pumpCreationMu sync.Mutex
 
 // V258: NativePumpState tracks a shared pump across multiple handles
 type NativePumpState struct {
-	cancel   context.CancelFunc
-	reader   *NativeReader
-	path     string
-	refCount int32 // V260: Track how many handles are using this pump
+	cancel    context.CancelFunc
+	reader    *NativeReader
+	path      string
+	refCount  int32 // V260: Track how many handles are using this pump
+	playerOff int64 // V702: Last known player read position, saved on handle release
 }
 
 // V226: Helper to create NativeReader via NativeBridge (Zero-Network Data Path)
@@ -982,10 +983,10 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		h.nativeReader = ps.reader
 		h.pumpCancel = ps.cancel
 		h.mu.Unlock()
-		// V701: Inherit pump's current position so the first Read() after a Plex/Samba
-		// handle reopen doesn't trigger a false V286 seek interrupt. Without this,
-		// lastOff=-1 makes any Read at e.g. 17872MB look like a forward seek >budget.
-		if curPos := raCache.MaxCachedOffset(h.path); curPos > 0 {
+		// V701/V702: Inherit the player's last known position from the shared pump state.
+		// Saved by the previous handle on Release(). Prevents false V286 backward-seek
+		// interrupts caused by Plex/Samba handle cycling during normal playback.
+		if curPos := atomic.LoadInt64(&ps.playerOff); curPos > 0 {
 			atomic.StoreInt64(&h.lastOff, curPos)
 		}
 		logger.Printf("[V264] Attached to existing pump (Refs: %d): %s", atomic.LoadInt32(&ps.refCount), filepath.Base(h.path))
@@ -1013,8 +1014,8 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			h.nativeReader = ps.reader
 			h.pumpCancel = ps.cancel
 			h.mu.Unlock()
-			// V701: Same as above — inherit pump position to prevent false V286
-			if curPos := raCache.MaxCachedOffset(h.path); curPos > 0 {
+			// V701/V702: Same as above — inherit player position to prevent false V286
+			if curPos := atomic.LoadInt64(&ps.playerOff); curPos > 0 {
 				atomic.StoreInt64(&h.lastOff, curPos)
 			}
 			pumpCreationMu.Unlock()
@@ -1871,6 +1872,12 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 	// V260: Shared Pump Reference Counting
 	if val, ok := activePumps.Load(h.path); ok {
 		ps := val.(*NativePumpState)
+		// V702: Persist the player's last read position into shared pump state.
+		// The next handle to attach (V701) will inherit this instead of the stale
+		// raCache high-water mark, preventing false V286 backward-seek interrupts.
+		if pos := atomic.LoadInt64(&h.lastOff); pos > 0 {
+			atomic.StoreInt64(&ps.playerOff, pos)
+		}
 		newRefs := atomic.AddInt32(&ps.refCount, -1)
 		logger.Printf("[V260] Release handle for %s (Remaining Refs: %d)", filepath.Base(h.path), newRefs)
 
