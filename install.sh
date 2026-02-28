@@ -141,6 +141,10 @@ install_system_deps() {
     command -v fusermount3 >/dev/null 2>&1 || needed["fusermount3"]="fuse3"
     command -v curl        >/dev/null 2>&1 || needed["curl"]="curl"
     command -v samba       >/dev/null 2>&1 || needed["samba"]="samba"
+    # libfuse3-dev is required for CGO_ENABLED=1 compilation (provides fuse.h)
+    dpkg -s libfuse3-dev   >/dev/null 2>&1 || needed["libfuse3-dev"]="libfuse3-dev"
+    # gcc is required for CGO
+    command -v gcc         >/dev/null 2>&1 || needed["gcc"]="gcc"
 
     if [ "${#needed[@]}" -eq 0 ]; then
         print_ok "All system dependencies already installed."

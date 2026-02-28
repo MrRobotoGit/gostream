@@ -284,18 +284,19 @@ chmod +x install.sh
 ./install.sh
 ```
 
-The interactive installer:
-1. Prompts for all required paths, Plex credentials, TMDB key, and NAT-PMP settings
-2. Generates `config.json` from `config.json.example`
-3. Installs Python dependencies from `requirements.txt`
-4. Creates `STATE/`, `logs/`, and FUSE mount point directories
-5. Writes and enables systemd services for `gostream` and `health-monitor`
-6. Optionally configures cron jobs for sync scripts
+The interactive installer handles everything end-to-end:
+1. Installs system dependencies (`fuse3`, `libfuse3-dev`, `gcc`, `samba`, `git`, `pip3`)
+2. Prompts for all required paths, Plex credentials, TMDB key, and NAT-PMP settings
+3. Generates `config.json` from `config.json.example`
+4. Installs Python dependencies from `requirements.txt`
+5. Creates `STATE/`, `logs/`, and FUSE mount point directories
+6. **Compiles the GoStream binary** (downloads Go if needed, detects architecture automatically)
+7. Writes and enables systemd services for `gostream` and `health-monitor`
+8. Optionally configures cron jobs for sync scripts
 
-After installation, build the binary (see [Build from Source](#-build-from-source)) and deploy:
+Once complete:
 
 ```bash
-cp gostream /home/pi/GoStream/gostream
 sudo systemctl start gostream health-monitor
 ```
 
