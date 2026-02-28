@@ -161,6 +161,15 @@ install_system_deps() {
 
     echo ""
     print_ok "System dependencies installed."
+
+    # Enable user_allow_other in /etc/fuse.conf (required for FUSE allow_other mount option)
+    if [ -f /etc/fuse.conf ]; then
+        if ! grep -q "^user_allow_other" /etc/fuse.conf; then
+            sudo sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf
+            grep -q "^user_allow_other" /etc/fuse.conf || echo "user_allow_other" | sudo tee -a /etc/fuse.conf >/dev/null
+            print_ok "FUSE: user_allow_other enabled in /etc/fuse.conf"
+        fi
+    fi
 }
 
 # ==============================================================================
