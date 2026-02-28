@@ -666,10 +666,15 @@ install_services() {
     print_info "Installing systemd service files (requires sudo)..."
 
     # -- gostream.service --
+    local wg_after=""
+    if [ "$NATPMP_ENABLED" = "true" ] && [ -n "$VPN_INTERFACE" ]; then
+        wg_after=" wg-quick@${VPN_INTERFACE}.service"
+    fi
+
     sudo tee /etc/systemd/system/gostream.service > /dev/null <<SERVICE_EOF
 [Unit]
 Description=GoStream + GoStorm (Unified Streaming Engine)
-After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target wg-quick@wg0.service
+After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target${wg_after}
 Wants=network-online.target
 StartLimitIntervalSec=0
 
