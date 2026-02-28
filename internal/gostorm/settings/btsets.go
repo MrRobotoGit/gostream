@@ -148,7 +148,7 @@ func SetDefaultConfig() {
 
 	sets := new(BTSets)
 	sets.CacheSize = 64 * 1024 * 1024 // 64 MB (Verified Optimal)
-	sets.PreloadCache = 50
+	sets.PreloadCache = 0
 	sets.ConnectionsLimit = 25 // CRITICAL: Do not increase for Pi 4
 	sets.RetrackersMode = 1
 	sets.TorrentDisconnectTimeout = 30
@@ -193,7 +193,7 @@ func loadBTSets() {
 	// Inline SetDefaultConfig logic to avoid double locking or use an unexported function
 	sets := new(BTSets)
 	sets.CacheSize = 64 * 1024 * 1024 // 64 MB
-	sets.PreloadCache = 50
+	sets.PreloadCache = 0
 	sets.ConnectionsLimit = 25
 	sets.RetrackersMode = 1
 	sets.TorrentDisconnectTimeout = 30
