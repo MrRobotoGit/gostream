@@ -917,17 +917,26 @@ Expected hot paths: `sha1.blockGeneric` (no crypto extensions on Pi 4 A72), `io.
 
 ## 📂 Key File Locations
 
+Paths below use the defaults set by `install.sh`. All are configurable during installation.
+
+**Runtime (install directory — default `~/GoStream/`)**
+
 | Path | Purpose |
 |------|---------|
-| `/home/pi/GoStream/gostream` | Production binary |
-| `/home/pi/GoStream/config.json` | Live configuration |
-| `/home/pi/GoStream/scripts/` | Python sync & monitor scripts |
-| `/home/pi/gostream/` | Go source code |
-| `/home/pi/gostream/default.pgo` | PGO profile for next build |
-| `/home/pi/STATE/` | Inode map, warmup cache |
-| `/home/pi/logs/gostream.log` | Main service log |
-| `/mnt/gostream-mkv-virtual/` | FUSE mount point |
-| `/etc/systemd/system/gostream.service` | Service definition |
+| `~/GoStream/gostream` | Production binary |
+| `~/GoStream/config.json` | Live configuration (edit → `sudo systemctl restart gostream`) |
+| `~/GoStream/scripts/` | Python sync & monitor scripts |
+| `~/STATE/` | Inode map & warmup cache (sibling of install dir) |
+| `~/logs/gostream.log` | Main service log |
+| `/mnt/gostream-mkv-virtual/` | FUSE mount point (served to Plex / Samba) |
+| `/etc/systemd/system/gostream.service` | systemd service definition |
+
+**Build (cloned repository — default `~/gostream/`)**
+
+| Path | Purpose |
+|------|---------|
+| `~/gostream/` | Git clone & build directory |
+| `~/gostream/default.pgo` | PGO profile — regenerate after major code changes |
 
 ---
 
