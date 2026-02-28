@@ -415,6 +415,14 @@ collect_hardware() {
         print_ok "NAT-PMP enabled (gateway: ${NATPMP_GATEWAY}, interface: ${VPN_INTERFACE})"
     else
         print_info "NAT-PMP disabled."
+        echo ""
+        print_warn "Without NAT-PMP/WireGuard, all BitTorrent traffic (DHT, peer"
+        print_warn "connections, tracker queries) flows directly through your home"
+        print_warn "router. This can saturate the router's NAT connection-tracking"
+        print_warn "table, causing instability or reboots on some devices."
+        print_warn "Recommended: keep ConnectionsLimit <= 25 and enable WireGuard"
+        print_warn "on the Pi before running GoStream in production."
+        echo ""
     fi
 }
 
