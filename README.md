@@ -78,8 +78,6 @@ Plex reads `/mnt/gostream-mkv-virtual/movies/Interstellar.mkv`. From Plex's pers
 | **L2** | SSD Warmup Head | 64 MB/file | Instant TTFF on replay — served at 150–200 MB/s from SSD |
 | **L3** | SSD Warmup Tail | 16 MB/file | MKV Cues (seek index) — Plex probes the end of every file before confirming playback |
 
-The BitTorrent engine (GoStorm) runs **in-process** with the FUSE layer — data flows through an in-memory `io.Pipe()`, skipping HTTP, TCP, and serialization entirely.
-
 What makes this non-trivial: a FUSE filesystem that backs a real directory of static files is straightforward. A FUSE filesystem that must handle non-sequential byte-range requests across hundreds of files, each backed by an independent torrent with variable peer availability, while a Plex scanner hammers every inode in parallel — that required building every subsystem from scratch.
 
 ---
@@ -108,8 +106,6 @@ BitTorrent Peers ←→ GoStorm Engine (:8090)
          Plex Media Server libraries
 ```
 
-GoStream runs as a **single process** — GoStorm engine and FUSE proxy compiled into one binary, bridged by an in-process `io.Pipe()`. Metadata operations are direct Go function calls.
-
 ### Port Map
 
 | Port | Purpose |
@@ -127,7 +123,7 @@ GoStream runs as a **single process** — GoStorm engine and FUSE proxy compiled
 
 ### 1. Zero-Network Native Bridge
 
-The FUSE proxy and GoStorm engine run in the **same OS process**. When Plex reads a `.mkv` byte range, the FUSE layer calls directly into the GoStorm engine via an in-memory `io.Pipe()`. There is no TCP round-trip, no HTTP header parsing, no serialization. This eliminates the network RTT that causes stuttering in HTTP-based torrent streaming proxies on constrained hardware.
+GoStream runs as a **single process** — GoStorm engine and FUSE proxy compiled into one binary. When Plex reads a `.mkv` byte range, the FUSE layer calls directly into GoStorm via an in-memory `io.Pipe()`: no TCP round-trip, no HTTP header parsing, no serialization, no proxy overhead. Metadata operations are direct Go function calls. This eliminates the network RTT that causes stuttering in every HTTP-based torrent streaming proxy on constrained hardware.
 
 ### 2. Two-Layer SSD Warmup Cache
 
