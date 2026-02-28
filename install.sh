@@ -360,7 +360,7 @@ collect_hardware() {
     print_header "[4/5] Hardware & Network"
 
     ask "GOMEMLIMIT (MiB)  — 2200 is optimal for Pi 4 / 4GB" "2200" GOMEMLIMIT_MB
-    ask "Disk warmup quota (GB)" "32" DISK_WARMUP_GB
+    ask "Disk warmup quota (GB)" "3" DISK_WARMUP_GB
     ask "Proxy listen port        (proxy_listen_port)" "8080" PROXY_PORT
     ask "Metrics/dashboard port   (metrics_port)"      "8096" METRICS_PORT
     ask "Health monitor port      (health-monitor.py)" "8095" DASHBOARD_PORT
@@ -440,7 +440,7 @@ generate_config_json() {
   "blocklist_url": "https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz",
   "physical_source_path": "/mnt/gostream-mkv-real",
   "fuse_mount_path": "/mnt/gostream-mkv-virtual",
-  "disk_warmup_quota_gb": 32,
+  "disk_warmup_quota_gb": 3,
   "warmup_head_size_mb": 64,
   "natpmp": {
     "enabled": false,
