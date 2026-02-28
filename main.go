@@ -11,6 +11,7 @@ import (
 	"io"
 	server "gostream/internal/gostorm"
 	"gostream/internal/gostorm/settings"
+	torrstor "gostream/internal/gostorm/torr/storage/torrstor"
 	tsutils "gostream/internal/gostorm/utils"
 	"gostream/internal/gostorm/web"
 	"hash/fnv"
@@ -2035,10 +2036,11 @@ func getOrReadMeta(path string) (*Metadata, error) {
 }
 
 type RaBuffer struct {
-	start, end int64
-	data       []byte
-	lastAccess int64 // V244: Atomic timestamp (UnixNano)
-	sessionID  int64 // V246: Session ID for Proactive Cleanup
+	start, end     int64
+	data           []byte
+	lastAccess     int64 // V244: Atomic timestamp (UnixNano)
+	sessionID      int64 // V246: Session ID for Proactive Cleanup
+	responsiveOnly bool  // V304: true if written in responsive mode (not SHA1-verified)
 }
 
 // V238: Sharded ReadAheadCache
@@ -2150,6 +2152,12 @@ func (c *ReadAheadCache) Get(p string, off, end int64) []byte {
 	defer s.mu.RUnlock()
 	key := raChunkKey(p, off)
 	if b, ok := s.buffers[key]; ok && off >= b.start && end <= b.end {
+		// V304: In STRICT mode, treat responsive-only chunks as misses.
+		// This forces the pump to re-read the position from the torrent (STRICT mode),
+		// overwriting the corrupt responsive-mode entry with SHA1-verified data.
+		if b.responsiveOnly && !torrstor.IsResponsive() {
+			return nil
+		}
 		// V244-Fix: Update activity timestamp atomically (Lock-Free)
 		atomic.StoreInt64(&b.lastAccess, time.Now().UnixNano())
 		// V274-Fix: Defensive copy — channel-based pool evicts buffers immediately,
@@ -2181,6 +2189,12 @@ func (c *ReadAheadCache) CopyTo(p string, off, end int64, dest []byte) int {
 	defer s.mu.RUnlock()
 	key := raChunkKey(p, off)
 	if b, ok := s.buffers[key]; ok && off >= b.start && end <= b.end {
+		// V304: In STRICT mode, treat responsive-only chunks as misses.
+		// Forces FUSE to fall through to FetchBlock (verified data) instead of serving
+		// unverified responsive-mode data after adaptive shield activation.
+		if b.responsiveOnly && !torrstor.IsResponsive() {
+			return 0
+		}
 		atomic.StoreInt64(&b.lastAccess, time.Now().UnixNano())
 		src := b.data[off-b.start : end-b.start+1]
 		n := copy(dest, src)
@@ -2246,7 +2260,10 @@ func (c *ReadAheadCache) Put(p string, start, end int64, d []byte) {
 	shard.total += dataSize
 	newUsed := atomic.AddInt64(&c.used, dataSize)
 	// V246: Use atomic timestamp AND SessionID
-	shard.buffers[key] = &RaBuffer{start, end, dataCopy, time.Now().UnixNano(), sessID}
+	// V304: Mark as responsive-only if written without SHA1 verification.
+	// FetchBlock paths (STRICT) and pump in STRICT mode write responsiveOnly=false.
+	responsiveOnly := torrstor.IsResponsive()
+	shard.buffers[key] = &RaBuffer{start, end, dataCopy, time.Now().UnixNano(), sessID, responsiveOnly}
 
 	// 3. Strict Eviction Loop (Global)
 	// While we are over budget, evict from THIS shard
