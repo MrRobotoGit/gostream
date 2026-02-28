@@ -982,6 +982,12 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		h.nativeReader = ps.reader
 		h.pumpCancel = ps.cancel
 		h.mu.Unlock()
+		// V701: Inherit pump's current position so the first Read() after a Plex/Samba
+		// handle reopen doesn't trigger a false V286 seek interrupt. Without this,
+		// lastOff=-1 makes any Read at e.g. 17872MB look like a forward seek >budget.
+		if curPos := raCache.MaxCachedOffset(h.path); curPos > 0 {
+			atomic.StoreInt64(&h.lastOff, curPos)
+		}
 		logger.Printf("[V264] Attached to existing pump (Refs: %d): %s", atomic.LoadInt32(&ps.refCount), filepath.Base(h.path))
 		pumpCreationMu.Unlock()
 		return
@@ -1007,6 +1013,10 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			h.nativeReader = ps.reader
 			h.pumpCancel = ps.cancel
 			h.mu.Unlock()
+			// V701: Same as above — inherit pump position to prevent false V286
+			if curPos := raCache.MaxCachedOffset(h.path); curPos > 0 {
+				atomic.StoreInt64(&h.lastOff, curPos)
+			}
 			pumpCreationMu.Unlock()
 			return
 		}
