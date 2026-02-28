@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">🎬 GoStream</h1>
   <p align="center">
-    <strong>Your Plex library. Every torrent. Instant playback. Nothing ever downloaded.</strong>
+    <strong>A custom FUSE virtual filesystem where every .mkv is a live torrent. Nothing is ever downloaded.</strong>
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/Platform-Raspberry%20Pi%204-c51a4a?style=flat-square&logo=raspberrypi&logoColor=white" alt="Raspberry Pi 4"/>
@@ -15,9 +15,13 @@
 
 ---
 
-GoStream fuses BitTorrent and Plex into a single seamless experience. Add a film to your Plex Watchlist — it appears in your library within the hour and plays instantly, **in 4K HDR Dolby Vision**, fully seekable, from a **Raspberry Pi 4**. No NAS full of files. No download queue. No waiting.
+GoStream exposes a **custom FUSE virtual filesystem** where every `.mkv` file is a perfect illusion: it looks like a real file on disk, but every byte is served live from a BitTorrent swarm on demand. No downloading. No temp files. No storage quota.
 
-**GoStream is built exclusively for Plex.** It is not a generic torrent client, not a download manager, not a media center. It is a purpose-built streaming engine that makes Plex believe it has a local disk full of MKV files — while underneath, **every byte is served live from a BitTorrent swarm on demand**.
+The BitTorrent engine runs **inside the same OS process** as the FUSE layer, connected by an in-memory `io.Pipe()`. When Plex reads a byte range, there is no HTTP round-trip, no serialization, no proxy overhead — just bytes, flowing directly from peers through RAM to Plex at full speed.
+
+The result: **4K HDR Dolby Vision**, fully seekable, on a **Raspberry Pi 4**, starting in 0.1 seconds.
+
+This is not a torrent client with a media server bolted on. The FUSE filesystem *is* the product — custom-built from scratch around the constraints of torrent streaming: non-sequential byte-range requests, multi-gigabyte files that must be seekable at any position, and a Plex scanner that probes every file in a library of hundreds of titles on startup.
 
 <table>
 <tr>
@@ -62,26 +66,17 @@ GoStream fuses BitTorrent and Plex into a single seamless experience. Add a film
 
 ## 🪄 How the Magic Works
 
-GoStream exposes a **custom FUSE virtual filesystem** where each `.mkv` file is a live torrent, presented to Plex exactly like a normal file on disk. The bytes Plex requests are resolved in real time from a three-layer cache:
+Plex reads `/mnt/gostream-mkv-virtual/movies/Interstellar.mkv`. From Plex's perspective, it's a normal 55 GB file on a local disk. In reality, the file does not exist. The FUSE kernel module intercepts the read, calls into GoStream, and GoStream serves the exact bytes from a three-layer cache — backed by a live BitTorrent swarm.
 
 | Layer | What | Size | Purpose |
 |-------|------|------|---------|
 | **L1** | In-memory Read-Ahead | 256 MB | 32-shard concurrent buffer with per-shard LRU |
-| **L2** | SSD Warmup Head | 64 MB/file | Instant metadata + TTFF on replay |
-| **L3** | SSD Warmup Tail | 16 MB/file | MKV Cues (seek index) for instant seek-bar rendering |
+| **L2** | SSD Warmup Head | 64 MB/file | Instant TTFF on replay — served at 150–200 MB/s from SSD |
+| **L3** | SSD Warmup Tail | 16 MB/file | MKV Cues (seek index) — Plex probes the end of every file before confirming playback |
 
-The BitTorrent engine runs **inside the same process** as the FUSE layer — no HTTP proxy, no TCP socket, no serialization. Just memory.
+The BitTorrent engine (GoStorm) runs **inside the same process** as the FUSE layer. Data flows through an `io.Pipe()` in memory — no HTTP, no TCP, no serialization on the hot path. Metadata calls are direct Go function calls.
 
-This is not a wrapper around an existing FUSE filesystem. The FUSE layer was designed from scratch around the constraints of torrent streaming: byte-range requests that arrive out of order, multi-gigabyte files that must be seekable at any position, and a Plex scanner that probes every file in the library on startup.
-
-### Plex Watchlist → Instant Library
-
-The sync scripts close the loop:
-
-1. **Every hour** → GoStream checks your Plex cloud Watchlist, finds the best torrent for each title via Torrentio (4K DV preferred), registers it with the engine
-2. **Every day** → TMDB Discover + Popular (Italian + English) auto-fills your library with trending titles
-3. **Every week** → TV series sync with fullpack-first approach and season pack structure
-4. On Plex library scan → the film appears. Press play → GoStream wakes the torrent, connects to peers, serves bytes. **Nothing ever stored on disk** beyond the 64 MB warmup head and the BoltDB torrent registry.
+What makes this non-trivial: a FUSE filesystem that backs a real directory of static files is straightforward. A FUSE filesystem that must handle non-sequential byte-range requests across hundreds of files, each backed by an independent torrent with variable peer availability, while a Plex scanner hammers every inode in parallel — that required building every subsystem from scratch.
 
 ---
 
@@ -181,9 +176,9 @@ Accurate, low-latency seeking in large 4K files required five coordinated fixes:
 
 The 256 MB read-ahead budget is distributed across **32 independent shards**, keyed by hash of file path + offset. Each shard has its own LRU and mutex. This eliminates global lock contention when multiple Plex sessions or scanner threads read concurrently. All pool operations use **defensive copies** on both `Put()` and `Get()` to prevent use-after-free races.
 
-### 7. 🤖 Automated Content Ecosystem
+### 7. 🐍 Optional Automation Layer
 
-Three Python sync scripts form a self-maintaining library:
+The engine is content-agnostic — torrents can be added manually via API. The included Python scripts are optional convenience automation on top:
 
 | Script | Trigger | What it does |
 |--------|---------|-------------|
