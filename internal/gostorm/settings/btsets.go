@@ -152,7 +152,7 @@ func SetDefaultConfig() {
 	sets.ConnectionsLimit = 25 // CRITICAL: Do not increase for Pi 4
 	sets.RetrackersMode = 1
 	sets.TorrentDisconnectTimeout = 30
-	sets.ReaderReadAHead = 95 // 95%
+	sets.ReaderReadAHead = 50 // 50%
 	sets.ResponsiveMode = true
 	sets.ShowFSActiveTorr = true
 	sets.StoreSettingsInJson = true
@@ -197,7 +197,7 @@ func loadBTSets() {
 	sets.ConnectionsLimit = 25
 	sets.RetrackersMode = 1
 	sets.TorrentDisconnectTimeout = 30
-	sets.ReaderReadAHead = 95 // 95%
+	sets.ReaderReadAHead = 50 // 50%
 	sets.ResponsiveMode = true
 	sets.ShowFSActiveTorr = true
 	sets.StoreSettingsInJson = true
