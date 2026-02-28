@@ -360,7 +360,21 @@ collect_hardware() {
     print_header "[4/5] Hardware & Network"
 
     ask "GOMEMLIMIT (MiB)  — 2200 is optimal for Pi 4 / 4GB" "2200" GOMEMLIMIT_MB
-    ask "Disk warmup quota (GB)" "3" DISK_WARMUP_GB
+
+    # Auto-recommend warmup quota: 20% of available space on PHYSICAL_SOURCE, capped 3-50 GB
+    local avail_gb warmup_default=10
+    avail_gb=$(df -BG --output=avail "${PHYSICAL_SOURCE}" 2>/dev/null | tail -1 | tr -d 'G ')
+    if [ -n "${avail_gb}" ] && [ "${avail_gb}" -gt 0 ] 2>/dev/null; then
+        warmup_default=$(( avail_gb / 5 ))          # 20 % of available
+        [ "${warmup_default}" -lt 3  ] && warmup_default=3
+        [ "${warmup_default}" -gt 50 ] && warmup_default=50
+    fi
+    echo ""
+    echo "  The warmup cache pre-stores the first 64 MB of each film on SSD so"
+    echo "  Plex can start playing instantly without waiting for torrent data."
+    echo "  ~23 MB per film on average → 1 GB ≈ 43 films, 10 GB ≈ 430 films."
+    echo "  Available on ${PHYSICAL_SOURCE}: ${avail_gb:-?} GB   (recommended: ${warmup_default} GB)"
+    ask "Disk warmup quota (GB)" "${warmup_default}" DISK_WARMUP_GB
     ask "Proxy listen port        (proxy_listen_port)" "8080" PROXY_PORT
     ask "Metrics/dashboard port   (metrics_port)"      "8096" METRICS_PORT
     ask "Health monitor port      (health-monitor.py)" "8095" DASHBOARD_PORT
