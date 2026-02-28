@@ -37,16 +37,6 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - **Health Monitor Dashboard** — real-time speed graph, active stream panel with movie poster + quality badges, sync controls, system stats.
 - **Single binary, 33 MB** — GoStorm engine + FUSE proxy + metrics + control panel + webhook receiver, all in one `gostream` executable.
 
-<table>
-<tr>
-<td align="center"><b>⚡ 0.1 s</b><br/>Warm start (SSD cache)</td>
-<td align="center"><b>📉 20% CPU</b><br/>4K HDR on Pi 4</td>
-<td align="center"><b>🔥 400+ Mbps</b><br/>Peak throughput</td>
-<td align="center"><b>🎯 −87%</b><br/>CPU vs baseline</td>
-<td align="center"><b>💾 33 MB</b><br/>Single binary</td>
-</tr>
-</table>
-
 ---
 
 ## Screenshots
