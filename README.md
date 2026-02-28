@@ -49,22 +49,22 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 ## Table of Contents
 
-- [How the Magic Works](#-how-the-magic-works)
-- [Architecture](#-architecture)
-- [Core Engineering](#-core-engineering)
-- [Performance](#-performance)
-- [Requirements](#-requirements)
-- [Quick Install](#-quick-install)
-- [How-To Guide](#-how-to-guide)
-- [Control Panel](#-gostream-control-panel)
-- [Health Monitor](#-health-monitor-dashboard)
-- [Configuration Reference](#-configuration-reference)
-- [Sync Scripts](#-sync-scripts)
-- [Plex & Samba Setup](#-plex-and-samba-setup)
-- [Build from Source](#-build-from-source)
-- [API Reference](#-api-quick-reference)
-- [Troubleshooting](#-troubleshooting)
-- [License](#-license)
+- [How the Magic Works](#how-the-magic-works)
+- [Architecture](#architecture)
+- [Core Engineering](#core-engineering)
+- [Performance](#performance)
+- [Requirements](#requirements)
+- [Quick Install](#quick-install)
+- [How-To Guide](#how-to-guide)
+- [Control Panel](#gostream-control-panel)
+- [Health Monitor](#health-monitor-dashboard)
+- [Configuration Reference](#configuration-reference)
+- [Sync Scripts](#sync-scripts)
+- [Plex & Samba Setup](#plex-and-samba-setup)
+- [Build from Source](#build-from-source)
+- [API Reference](#api-quick-reference)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 ---
 
