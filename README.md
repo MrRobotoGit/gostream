@@ -35,7 +35,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - **Plex Webhook integration** — `media.play` activates Priority Mode (aggressive piece prioritization). IMDB-ID extracted from raw payload via regex — works even when Plex sends localized titles.
 - **Embedded Control Panel** — full web UI at `:8096/control`, compiled into the binary. Adjust all FUSE and engine settings live.
 - **Health Monitor Dashboard** — real-time speed graph, active stream panel with movie poster + quality badges, sync controls, system stats.
-- **Single binary, 33 MB** — GoStorm engine + FUSE proxy + metrics + control panel + webhook receiver, all in one `gostream` executable.
+- **Single binary** — GoStorm engine + FUSE proxy + metrics + control panel + webhook receiver, all in one `gostream` executable.
 
 ---
 
