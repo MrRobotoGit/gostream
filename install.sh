@@ -846,8 +846,13 @@ compile_binary() {
     fi
 
     # -p 2 limits parallel jobs to keep peak RAM under control on Pi 4
+    # GOTMPDIR on the main FS avoids OOM on small /tmp tmpfs during linking
+    local go_tmp="${HOME}/go-tmp"
+    mkdir -p "${go_tmp}"
     print_info "Building binary (GOARCH=${GO_ARCH}, -p 2)..."
-    GOTOOLCHAIN=local GOARCH="${GO_ARCH}" CGO_ENABLED=1 "$GO_BIN" build ${pgo_flag} -p 2 -o "${out_bin}" .
+    GOTOOLCHAIN=local GOARCH="${GO_ARCH}" CGO_ENABLED=1 GOTMPDIR="${go_tmp}" \
+        "$GO_BIN" build ${pgo_flag} -p 2 -o "${out_bin}" .
+    rm -rf "${go_tmp}"
 
     chmod +x "${out_bin}"
     print_ok "Binary compiled and deployed: ${out_bin}"
