@@ -1,14 +1,14 @@
 package api
 
 import (
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torrshash"
+	"gostream/internal/gostorm/torrshash"
 	"net/http"
 	"strings"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torr"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/state"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/web/api/utils"
+	"gostream/internal/gostorm/log"
+	"gostream/internal/gostorm/torr"
+	"gostream/internal/gostorm/torr/state"
+	"gostream/internal/gostorm/web/api/utils"
 
 	"github.com/anacrolix/torrent"
 	"github.com/gin-gonic/gin"

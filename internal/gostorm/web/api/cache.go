@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torr"
+	"gostream/internal/gostorm/torr"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"

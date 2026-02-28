@@ -18,10 +18,10 @@ import (
 	"github.com/anacrolix/torrent/mse"
 	"golang.org/x/time/rate"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/settings"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/storage/torrstor"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/utils"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/version"
+	"gostream/internal/gostorm/settings"
+	"gostream/internal/gostorm/torr/storage/torrstor"
+	"gostream/internal/gostorm/torr/utils"
+	"gostream/internal/gostorm/version"
 )
 
 type BTServer struct {

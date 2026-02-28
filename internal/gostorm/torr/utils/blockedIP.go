@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
+	"gostream/internal/gostorm/log"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/settings"
+	"gostream/internal/gostorm/settings"
 
 	"github.com/anacrolix/torrent/iplist"
 )

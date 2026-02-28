@@ -3,10 +3,10 @@ package api
 import (
 	"net/http"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
-	set "github.com/MrRobotoGit/gostream/internal/gostorm/settings"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torr"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/web/api/utils"
+	"gostream/internal/gostorm/log"
+	set "gostream/internal/gostorm/settings"
+	"gostream/internal/gostorm/torr"
+	"gostream/internal/gostorm/web/api/utils"
 
 	"github.com/gin-gonic/gin"
 )

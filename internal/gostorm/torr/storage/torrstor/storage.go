@@ -3,7 +3,7 @@ package torrstor
 import (
 	"sync"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/storage"
+	"gostream/internal/gostorm/torr/storage"
 
 	"github.com/anacrolix/torrent/metainfo"
 	ts "github.com/anacrolix/torrent/storage"

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/settings"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torr/state"
+	"gostream/internal/gostorm/log"
+	"gostream/internal/gostorm/settings"
+	"gostream/internal/gostorm/torr/state"
 
 	"github.com/anacrolix/torrent"
 )

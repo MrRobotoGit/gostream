@@ -12,8 +12,8 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
-	sets "github.com/MrRobotoGit/gostream/internal/gostorm/settings"
+	"gostream/internal/gostorm/log"
+	sets "gostream/internal/gostorm/settings"
 )
 
 var (

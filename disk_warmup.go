@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/settings"
+	"gostream/internal/gostorm/settings"
 )
 
 // warmupFileSize is the per-file head cache cap. Set at init from config, default 64 MB.

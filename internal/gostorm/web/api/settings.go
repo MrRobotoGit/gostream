@@ -6,8 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 
-	sets "github.com/MrRobotoGit/gostream/internal/gostorm/settings"
-	"github.com/MrRobotoGit/gostream/internal/gostorm/torr"
+	sets "gostream/internal/gostorm/settings"
+	"gostream/internal/gostorm/torr"
 )
 
 // Action: get, set, def

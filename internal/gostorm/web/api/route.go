@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/MrRobotoGit/gostream/internal/gostorm/web/auth"
+	"gostream/internal/gostorm/web/auth"
 
 	"github.com/gin-gonic/gin"
 )

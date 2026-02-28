@@ -3,7 +3,7 @@ package settings
 import (
 	"sync"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
+	"gostream/internal/gostorm/log"
 )
 
 type DBReadCache struct {

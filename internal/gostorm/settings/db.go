@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MrRobotoGit/gostream/internal/gostorm/log"
+	"gostream/internal/gostorm/log"
 
 	bolt "go.etcd.io/bbolt"
 )
