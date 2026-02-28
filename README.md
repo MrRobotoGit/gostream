@@ -135,7 +135,7 @@ The FUSE proxy and GoStorm engine run in the **same OS process**. When Plex read
 - **Tail cache** — The last 16 MB is cached separately. MKV files store their Cues (seek index) near the end. Without tail cache, Plex probes the end of the file before confirming playback and the seek bar renders as unavailable.
 - **Quota**: 32 GB default, LRU eviction by write-time mtime (~150 films cached simultaneously).
 - **Auto-population**: Plex library scans read the first 1 MB of every file — enough to populate warmup heads automatically; no manual warming step.
-- **Storage**: `{install_dir}/STATE/warmup/`
+- **Storage**: configurable via Control Panel → GoStorm settings → *Warmup path* field.
 
 ### 3. Plex Webhook Integration & Smart Streaming
 
@@ -920,7 +920,7 @@ Paths below use the defaults set by `install.sh`. All are configurable during in
 | `~/GoStream/gostream` | Production binary |
 | `~/GoStream/config.json` | Live configuration (edit → `sudo systemctl restart gostream`) |
 | `~/GoStream/scripts/` | Python sync & monitor scripts |
-| `~/STATE/` | Inode map & warmup cache (sibling of install dir) |
+| `~/STATE/` | Inode map (sibling of install dir) |
 | `~/logs/gostream.log` | Main service log |
 | `/mnt/gostream-mkv-virtual/` | FUSE mount point (served to Plex / Samba) |
 | `/etc/systemd/system/gostream.service` | systemd service definition |
