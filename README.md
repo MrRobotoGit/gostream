@@ -49,7 +49,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 ---
 
-## 📸 Screenshots
+## Screenshots
 
 ![Health Monitor — Status grid and sync controls](docs/screenshots/health_monitor_1.png)
 
@@ -57,7 +57,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 ---
 
-## 📖 Table of Contents
+## Table of Contents
 
 - [How the Magic Works](#-how-the-magic-works)
 - [Architecture](#-architecture)
@@ -78,7 +78,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 ---
 
-## 🪄 How the Magic Works
+## How the Magic Works
 
 Plex reads `/mnt/gostream-mkv-virtual/movies/Interstellar.mkv`. From Plex's perspective, it's a normal 55 GB file on a local disk. In reality, the file does not exist. The FUSE kernel module intercepts the read, calls into GoStream, and GoStream serves the exact bytes from a three-layer cache — backed by a live BitTorrent swarm.
 
@@ -94,7 +94,7 @@ What makes this non-trivial: a FUSE filesystem that backs a real directory of st
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 BitTorrent Peers ←→ GoStorm Engine (:8090)
@@ -131,15 +131,15 @@ GoStream runs as a **single process**. The GoStorm BitTorrent engine and the FUS
 
 ---
 
-## ⚙️ Core Engineering
+## Core Engineering
 
 > **11 purpose-built subsystems**, each solving a real problem encountered during development on Raspberry Pi 4 hardware.
 
-### 1. 🔗 Zero-Network Native Bridge
+### 1. Zero-Network Native Bridge
 
 The FUSE proxy and GoStorm engine run in the **same OS process**. When Plex reads a `.mkv` byte range, the FUSE layer calls directly into the GoStorm engine via an in-memory `io.Pipe()`. There is no TCP round-trip, no HTTP header parsing, no serialization. This eliminates the network RTT that causes stuttering in HTTP-based torrent streaming proxies on constrained hardware.
 
-### 2. 💽 Two-Layer SSD Warmup Cache
+### 2. Two-Layer SSD Warmup Cache
 
 - **Head cache** — The first 64 MB of each file is written to SSD on first play. Repeat TTFF: **< 0.01 s** (SSD at 150–200 MB/s, vs. 2–4 s for cold torrent activation).
 - **Tail cache** — The last 16 MB is cached separately. MKV files store their Cues (seek index) near the end. Without tail cache, Plex probes the end of the file before confirming playback and the seek bar renders as unavailable.
@@ -147,7 +147,7 @@ The FUSE proxy and GoStorm engine run in the **same OS process**. When Plex read
 - **Auto-population**: Plex library scans read the first 1 MB of every file — enough to populate warmup heads automatically; no manual warming step.
 - **Storage**: `{install_dir}/STATE/warmup/`
 
-### 3. 🎯 Plex Webhook Integration & Smart Streaming
+### 3. Plex Webhook Integration & Smart Streaming
 
 GoStream embeds a webhook receiver at `:8096/plex-webhook`. When Plex sends a `media.play` event:
 
@@ -163,7 +163,7 @@ GoStream embeds a webhook receiver at `:8096/plex-webhook`. When Plex sends a `m
 http://<your-pi-ip>:8096/plex-webhook
 ```
 
-### 4. 🛡️ Adaptive Responsive Shield
+### 4. Adaptive Responsive Shield
 
 Two read modes, automatically managed:
 
@@ -174,7 +174,7 @@ Two read modes, automatically managed:
 
 If a corrupt piece is detected (`MarkNotComplete()`), the Adaptive Shield activates Strict Mode for 60 seconds, then automatically restores Responsive. Transition tracked via atomic boolean — **zero mutex contention** on the hot read path.
 
-### 5. 🎮 Seek-Master Architecture
+### 5. Seek-Master Architecture
 
 Accurate, low-latency seeking in large 4K files required five coordinated fixes:
 
@@ -186,11 +186,11 @@ Accurate, low-latency seeking in large 4K files required five coordinated fixes:
 | **Pump survival** | Pump survives `ErrInterrupted` via 200 ms sleep-and-continue — no goroutine restart overhead |
 | **Tail probe detection** | Plex's end-of-file MKV Cues probes served from SSD tail cache without steering the pump |
 
-### 6. 🧩 32-Shard Read-Ahead Cache
+### 6. 32-Shard Read-Ahead Cache
 
 The 256 MB read-ahead budget is distributed across **32 independent shards**, keyed by hash of file path + offset. Each shard has its own LRU and mutex. This eliminates global lock contention when multiple Plex sessions or scanner threads read concurrently. All pool operations use **defensive copies** on both `Put()` and `Get()` to prevent use-after-free races.
 
-### 7. 🐍 Optional Automation Layer
+### 7. Optional Automation Layer
 
 The engine is content-agnostic — torrents can be added manually via API. The included Python scripts are optional convenience automation on top:
 
@@ -204,7 +204,7 @@ The engine is content-agnostic — torrents can be added manually via API. The i
 **Quality ladder**: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`\
 **Minimum seeders**: 20 (main sync), 10 (watchlist sync, for older films)
 
-### 8. 🌐 NAT-PMP Native VPN Port Forwarding
+### 8. NAT-PMP Native VPN Port Forwarding
 
 Integrated as a sidecar goroutine. On startup (and periodically), GoStream requests a TCP+UDP port mapping from the VPN gateway via NAT-PMP, installs `iptables PREROUTING REDIRECT` rules, and updates GoStorm's `PeersListenPort` — all without a restart.
 
@@ -214,15 +214,15 @@ Integrated as a sidecar goroutine. On startup (and periodically), GoStream reque
 | **WireGuard + NAT-PMP** | **15–21 Mbps** | **19–20** |
 | AMZN WEB-DL torrents | 140–198 Mbps | 23–25 |
 
-### 9. 🚫 IP Blocklist — ~700k Ranges
+### 9. IP Blocklist ~700k Ranges
 
 Auto-downloads and periodically refreshes a gzipped BGP/country blocklist. Injected directly into anacrolix/torrent's IP filter — blocks known-bad actors before any connection attempt. Refresh: 24 h.
 
-### 10. 🚀 Profile-Guided Optimization (PGO)
+### 10. Profile-Guided Optimization (PGO)
 
 Binary compiled with `-pgo=auto`. Go 1.24 reads `default.pgo` to inline hot paths and optimize branch prediction from real production profiling data. On Pi 4 Cortex-A72 (no hardware AES/SHA1): **~5–7% CPU reduction** from PGO alone.
 
-### 11. 🔧 GoStorm Engine — Deep Fork of TorrServer Matrix + anacrolix/torrent
+### 11. GoStorm Engine Deep Fork of TorrServer Matrix + anacrolix/torrent
 
 GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer)** (BitTorrent management layer) and **[anacrolix/torrent v1.55](https://github.com/anacrolix/torrent)** (peer protocol engine). Both upstreams have been patched extensively for streaming correctness and performance — fixes that are not present in the original projects:
 
@@ -247,7 +247,7 @@ GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrSe
 
 ---
 
-## 📊 Performance
+## Performance
 
 > All measurements on **Raspberry Pi 4** (4 GB RAM, Cortex-A72, arm64, no hardware crypto).
 
@@ -268,7 +268,7 @@ GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrSe
 
 ---
 
-## 📋 Requirements
+## Requirements
 
 | Component | Details |
 |-----------|---------|
@@ -284,7 +284,7 @@ GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrSe
 
 ---
 
-## 🚀 Quick Install
+## Quick Install
 
 ```bash
 git clone https://github.com/MrRobotoGit/gostream gostream
@@ -313,7 +313,7 @@ sudo systemctl start gostream health-monitor
 
 ---
 
-## 📘 How-To Guide
+## How-To Guide
 
 <details>
 <summary><b>Step 1 — Configure the Plex Webhook</b></summary>
@@ -422,16 +422,16 @@ python3 /home/pi/GoStream/scripts/plex-watchlist-sync.py --dry-run --verbose
 <summary><b>Step 7 — Monitor in Real Time</b></summary>
 
 ```bash
-# Control Panel — GoStream + GoStorm settings, paths, restart button
+# Control Panel GoStream + GoStorm settings, paths, restart button
 open http://192.168.1.2:8096/control
 
-# Health Dashboard — speed graph, torrent stats, active stream, log viewer
+# Health Dashboard speed graph, torrent stats, active stream, log viewer
 open http://192.168.1.2:8095
 
 # Raw metrics (JSON)
 curl -s http://192.168.1.2:8096/metrics | python3 -m json.tool
 
-# Live log — key events only
+# Live log key events only
 ssh pi@192.168.1.2 "tail -f /home/pi/logs/gostream.log | grep -E '(OPEN|NATIVE|Interrupt|Jump|DiskWarmup|Emergency)'"
 
 # Active torrents in RAM with speed
@@ -452,13 +452,13 @@ crontab -e
 Add:
 
 ```cron
-# Plex Watchlist sync — every hour
+# Plex Watchlist sync every hour
 0 * * * * /usr/bin/python3 /home/pi/GoStream/scripts/plex-watchlist-sync.py >> /home/pi/logs/watchlist-sync.log 2>&1
 
-# Full movie sync — daily at 3 AM
+# Full movie sync daily at 3 AM
 0 3 * * * /usr/bin/python3 /home/pi/GoStream/scripts/gostorm-sync-complete.py >> /home/pi/logs/gostorm-debug.log 2>&1
 
-# TV sync — every Sunday at 4 AM
+# TV sync every Sunday at 4 AM
 0 4 * * 0 /usr/bin/python3 /home/pi/GoStream/scripts/gostorm-tv-sync.py >> /home/pi/logs/gostorm-tv-sync.log 2>&1
 ```
 
@@ -511,7 +511,7 @@ curl -o /tmp/pgo-stream.pprof "http://127.0.0.1:8096/debug/pprof/profile?seconds
 curl -o /tmp/pgo-sync.pprof   "http://127.0.0.1:8096/debug/pprof/profile?seconds=120"
 go tool pprof -proto /tmp/pgo-stream.pprof /tmp/pgo-sync.pprof > /home/pi/gostream/default.pgo
 
-# Rebuild — Go detects the changed profile and re-optimizes automatically
+# Rebuild Go detects the changed profile and re-optimizes automatically
 cd /home/pi/gostream
 GOARCH=arm64 CGO_ENABLED=1 /usr/local/go/bin/go build -pgo=auto -o gostream .
 ```
@@ -522,7 +522,7 @@ Regenerate after significant code changes. On Pi 4 Cortex-A72, `sha1.blockGeneri
 
 ---
 
-## 🎛️ GoStream Control Panel
+## GoStream Control Panel
 
 The Control Panel is a web UI **embedded in the GoStream binary** — no additional server, no React build step, no external dependencies. Served at `:8096/control`.
 
@@ -564,7 +564,7 @@ Settings are pushed **live via API** — no restart needed. **Apply All Core Set
 
 ---
 
-## 📈 Health Monitor Dashboard
+## Health Monitor Dashboard
 
 Standalone Python service (`health-monitor.py`) at port **`:8095`**. Real-time operational view of the entire stack.
 
@@ -606,7 +606,7 @@ Two panels for manual sync execution without SSH:
 
 ---
 
-## ⚙️ Configuration Reference
+## Configuration Reference
 
 `config.json` is resolved relative to the binary's path (`os.Executable()`). No path argument needed. Not tracked by git (contains credentials).
 
@@ -648,13 +648,13 @@ Environment="GOGC=100"
 
 ---
 
-## 🔄 Sync Scripts
+## Sync Scripts
 
 ![Plex library populated by sync scripts](docs/screenshots/library.png)
 
 All scripts in `scripts/` resolve `config.json` from the parent directory automatically. Override with `MKV_PROXY_CONFIG_PATH`.
 
-### `gostorm-sync-complete.py` — Daily Movie Sync
+### `gostorm-sync-complete.py` Daily Movie Sync
 
 Queries TMDB Discover + Popular (Italian + English, region IT+US), evaluates Torrentio results, adds the best torrent.
 
@@ -666,7 +666,7 @@ python3 scripts/gostorm-sync-complete.py
 - Min seeders: 20 · Min size: 10 GB (4K), 3 GB (1080p)
 - Skips existing films (by TMDB ID) · Upgrades lower-quality entries
 
-### `gostorm-tv-sync.py` — Weekly TV Sync
+### `gostorm-tv-sync.py` Weekly TV Sync
 
 ```bash
 python3 scripts/gostorm-tv-sync.py
@@ -680,7 +680,7 @@ Show Name/
     Show.Name_S01E02_<hash>.mkv
 ```
 
-### `plex-watchlist-sync.py` — Hourly Watchlist Sync
+### `plex-watchlist-sync.py` Hourly Watchlist Sync
 
 ```bash
 python3 scripts/plex-watchlist-sync.py [--dry-run] [--verbose]
@@ -688,7 +688,7 @@ python3 scripts/plex-watchlist-sync.py [--dry-run] [--verbose]
 
 Reads Plex cloud watchlist → IMDB ID resolution → Torrentio (min 10 seeders) → GoStorm.
 
-### `health-monitor.py` — Dashboard
+### `health-monitor.py` Dashboard
 
 ```bash
 python3 scripts/health-monitor.py
@@ -699,7 +699,7 @@ Real-time dashboard at `:8095`. See [Health Monitor Dashboard](#-health-monitor-
 
 ---
 
-## 🔌 Plex and Samba Setup
+## Plex and Samba Setup
 
 ### Samba Configuration
 
@@ -734,7 +734,7 @@ Options: serverino,vers=3.0,uid=1024,gid=100,file_mode=0777,dir_mode=0777
 
 ---
 
-## 🛠️ Build from Source
+## Build from Source
 
 > [!IMPORTANT]
 > Compile natively on Pi 4 (arm64). Do not cross-compile — the PGO profile must match the target architecture.
@@ -756,8 +756,8 @@ sudo systemctl start gostream
 **Verify the toolchain is 64-bit:**
 ```bash
 /usr/local/go/bin/go version
-# ✅ Required: go version go1.24.x linux/arm64
-# ❌ Wrong:    go version go1.24.x linux/arm   <-- 32-bit
+# Required: go version go1.24.x linux/arm64
+# Wrong:    go version go1.24.x linux/arm   <-- 32-bit
 ```
 
 **Install Go 1.24 if needed:**
@@ -768,7 +768,7 @@ sudo tar -C /usr/local -xzf go1.24.0.linux-arm64.tar.gz
 
 ---
 
-## 📡 API Quick Reference
+## API Quick Reference
 
 ### GoStorm API (`:8090`)
 
@@ -809,7 +809,7 @@ curl -s http://127.0.0.1:8096/metrics | \
 
 ---
 
-## 🔍 Troubleshooting
+## Troubleshooting
 
 <details>
 <summary><b>Plex shows buffering or "Playback Error"</b></summary>
@@ -919,7 +919,7 @@ Expected hot paths: `sha1.blockGeneric` (no crypto extensions on Pi 4 A72), `io.
 
 ---
 
-## 📂 Key File Locations
+## Key File Locations
 
 Paths below use the defaults set by `install.sh`. All are configurable during installation.
 
@@ -944,6 +944,6 @@ Paths below use the defaults set by `install.sh`. All are configurable during in
 
 ---
 
-## 📄 License
+## License
 
 MIT
