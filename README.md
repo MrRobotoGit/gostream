@@ -25,17 +25,17 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 ### What's included
 
-- **🎬 Custom FUSE virtual filesystem** — every `.mkv` is a live torrent, presented to Plex as a real file. Zero bytes stored on disk beyond a 64 MB SSD warmup head per film.
-- **⚙️ Embedded torrent engine** — GoStorm, a fork of [TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer) + [anacrolix/torrent v1.55](https://github.com/anacrolix/torrent), runs in-process with the FUSE layer. Both upstreams carry targeted bug fixes and streaming-performance patches not present in the originals. Data path is a pure `io.Pipe()` — no HTTP, no TCP, no serialization.
-- **🎥 Auto-discovery: Movies** — daily sync pulls trending and popular movies from TMDB (Discover + Popular), finds the best available torrent via Torrentio (4K DV preferred), and registers them automatically.
-- **📺 Auto-discovery: TV Series** — weekly sync with fullpack-first season pack strategy, Plex-compatible directory structure.
-- **🎯 Plex Watchlist sync** — add a title to your Plex cloud watchlist; it appears in your library within the hour.
-- **🌐 Native NAT-PMP** — built-in WireGuard port forwarding. Requests a port mapping from the VPN gateway, installs `iptables REDIRECT` rules, and updates the engine — no restart, no scripts. Turns 8 peers into 20+.
-- **🚫 Peer Blocklist** — ~700,000 IP ranges auto-downloaded and refreshed every 24 h. Injected directly into the torrent engine before any connection attempt.
-- **🔗 Plex Webhook integration** — `media.play` activates Priority Mode (aggressive piece prioritization). IMDB-ID extracted from raw payload via regex — works even when Plex sends localized titles.
-- **📊 Embedded Control Panel** — full web UI at `:8096/control`, compiled into the binary. Adjust all FUSE and engine settings live.
-- **📈 Health Monitor Dashboard** — real-time speed graph, active stream panel with movie poster + quality badges, sync controls, system stats.
-- **🔒 Single binary, 33 MB** — GoStorm engine + FUSE proxy + metrics + control panel + webhook receiver, all in one `gostream` executable.
+- **Custom FUSE virtual filesystem** — every `.mkv` is a live torrent, presented to Plex as a real file. Zero bytes stored on disk beyond a 64 MB SSD warmup head per film.
+- **Embedded torrent engine** — GoStorm, a fork of [TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer) + [anacrolix/torrent v1.55](https://github.com/anacrolix/torrent), runs in-process with the FUSE layer. Both upstreams carry targeted bug fixes and streaming-performance patches not present in the originals. Data path is a pure `io.Pipe()` — no HTTP, no TCP, no serialization.
+- **Auto-discovery: Movies** — daily sync pulls trending and popular movies from TMDB (Discover + Popular), finds the best available torrent via Torrentio (4K DV preferred), and registers them automatically.
+- **Auto-discovery: TV Series** — weekly sync with fullpack-first season pack strategy, Plex-compatible directory structure.
+- **Plex Watchlist sync** — add a title to your Plex cloud watchlist; it appears in your library within the hour.
+- **Native NAT-PMP** — built-in WireGuard port forwarding. Requests a port mapping from the VPN gateway, installs `iptables REDIRECT` rules, and updates the engine — no restart, no scripts. Turns 8 peers into 20+.
+- **Peer Blocklist** — ~700,000 IP ranges auto-downloaded and refreshed every 24 h. Injected directly into the torrent engine before any connection attempt.
+- **Plex Webhook integration** — `media.play` activates Priority Mode (aggressive piece prioritization). IMDB-ID extracted from raw payload via regex — works even when Plex sends localized titles.
+- **Embedded Control Panel** — full web UI at `:8096/control`, compiled into the binary. Adjust all FUSE and engine settings live.
+- **Health Monitor Dashboard** — real-time speed graph, active stream panel with movie poster + quality badges, sync controls, system stats.
+- **Single binary, 33 MB** — GoStorm engine + FUSE proxy + metrics + control panel + webhook receiver, all in one `gostream` executable.
 
 <table>
 <tr>
