@@ -1638,8 +1638,10 @@ class GoStormTV:
             self.log("INFO", f"Duration: {elapsed:.1f}s")
             self.log("INFO", "=" * 60)
 
-            # Trigger Plex refresh for Serie TV Go (Library ID 27)
-            self.notify_plex(27)
+            # Trigger Plex refresh for TV library
+            tv_lib_id = _cfg.get('plex', {}).get('tv_library_id', 0)
+            if tv_lib_id:
+                self.notify_plex(tv_lib_id)
 
             return True
 

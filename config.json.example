@@ -41,7 +41,8 @@
   "plex": {
     "url": "http://127.0.0.1:32400",
     "token": "",
-    "library_id": 0
+    "library_id": 0,
+    "tv_library_id": 0
   },
   "tmdb_api_key": ""
 }

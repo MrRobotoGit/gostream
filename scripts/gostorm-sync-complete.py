@@ -5133,8 +5133,10 @@ class GoStormSync:
         self.log("INFO", "    Run gostorm-tv-sync.py for TV shows management")
         self.log("INFO", f"Complete Movies sync finished at {time.strftime('%Y-%m-%d %H:%M:%S')}")
         
-        # Trigger Plex refresh for Film Go (Library ID 32)
-        self.notify_plex(31)
+        # Trigger Plex refresh for movies library
+        movies_lib_id = _cfg.get('plex', {}).get('library_id', 0)
+        if movies_lib_id:
+            self.notify_plex(movies_lib_id)
         
         return True
 

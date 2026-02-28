@@ -270,6 +270,7 @@ collect_plex() {
     ask_secret "Plex token (hidden)" PLEX_TOKEN
 
     PLEX_LIBRARY_ID=0
+    PLEX_TV_LIBRARY_ID=0
 
     # Auto-discover library sections if we have curl and a non-empty token
     if [ -n "$PLEX_TOKEN" ] && command -v curl >/dev/null 2>&1; then
@@ -278,12 +279,12 @@ collect_plex() {
         local sections_xml
         if sections_xml=$(curl -sf --max-time 8 \
                 "${PLEX_URL}/library/sections?X-Plex-Token=${PLEX_TOKEN}" 2>/dev/null); then
-            # Parse XML with python3: extract (key, title) pairs for video libraries
+            # Parse XML with python3: extract (key, title, type) via env var to avoid stdin conflict
             local parsed
-            parsed=$(python3 - <<'PYEOF'
-import sys, xml.etree.ElementTree as ET
+            parsed=$(PLEX_SECTIONS_XML="$sections_xml" python3 <<'PYEOF'
+import os, xml.etree.ElementTree as ET, sys
 
-xml_text = sys.stdin.read()
+xml_text = os.environ.get('PLEX_SECTIONS_XML', '')
 try:
     root = ET.fromstring(xml_text)
 except ET.ParseError as e:
@@ -300,13 +301,13 @@ for directory in root.findall('Directory'):
 
 print('\n'.join(sections))
 PYEOF
-                <<< "$sections_xml") || true
+) || true
 
             if [ -n "$parsed" ]; then
                 echo ""
                 echo "  Available Plex libraries:"
                 local i=1
-                local -a lib_keys lib_titles
+                local -a lib_keys lib_titles lib_types
                 while IFS= read -r line; do
                     local key title lib_type
                     key="${line%%:*}"
@@ -314,35 +315,48 @@ PYEOF
                     lib_type="${rest##*:}"
                     title="${rest%:*}"
                     lib_keys+=("$key")
-                    lib_titles+=("$title ($lib_type)")
-                    printf "    %d) [%s] %s\n" "$i" "$key" "$title ($lib_type)"
+                    lib_titles+=("$title")
+                    lib_types+=("$lib_type")
+                    printf "    %d) [%s] %s (%s)\n" "$i" "$key" "$title" "$lib_type"
                     (( i++ )) || true
                 done <<< "$parsed"
 
                 echo ""
-                ask "Select library number (0 to enter manually)" "0" _lib_choice
-
-                if [ "$_lib_choice" -gt 0 ] 2>/dev/null && \
-                   [ "$_lib_choice" -le "${#lib_keys[@]}" ] 2>/dev/null; then
-                    local idx=$(( _lib_choice - 1 ))
+                ask "Movies library number (0 to enter manually)" "0" _movies_choice
+                if [ "$_movies_choice" -gt 0 ] 2>/dev/null && \
+                   [ "$_movies_choice" -le "${#lib_keys[@]}" ] 2>/dev/null; then
+                    local idx=$(( _movies_choice - 1 ))
                     PLEX_LIBRARY_ID="${lib_keys[$idx]}"
-                    print_ok "Selected: ${lib_titles[$idx]} (ID: ${PLEX_LIBRARY_ID})"
+                    print_ok "Movies library: ${lib_titles[$idx]} (ID: ${PLEX_LIBRARY_ID})"
                 else
-                    ask "Plex library ID (numeric)" "1" PLEX_LIBRARY_ID
+                    ask "Movies library ID (numeric)" "1" PLEX_LIBRARY_ID
+                fi
+
+                ask "TV library number (0 to enter manually, 0 if none)" "0" _tv_choice
+                if [ "$_tv_choice" -gt 0 ] 2>/dev/null && \
+                   [ "$_tv_choice" -le "${#lib_keys[@]}" ] 2>/dev/null; then
+                    local idx=$(( _tv_choice - 1 ))
+                    PLEX_TV_LIBRARY_ID="${lib_keys[$idx]}"
+                    print_ok "TV library: ${lib_titles[$idx]} (ID: ${PLEX_TV_LIBRARY_ID})"
+                else
+                    ask "TV library ID (numeric, 0 to skip)" "0" PLEX_TV_LIBRARY_ID
                 fi
             else
                 print_warn "No movie/TV libraries found — entering manually."
-                ask "Plex library ID (numeric)" "1" PLEX_LIBRARY_ID
+                ask "Movies library ID (numeric)" "1" PLEX_LIBRARY_ID
+                ask "TV library ID (numeric, 0 to skip)" "0" PLEX_TV_LIBRARY_ID
             fi
         else
-            print_warn "Could not reach Plex at ${PLEX_URL} — entering library ID manually."
-            ask "Plex library ID (numeric)" "1" PLEX_LIBRARY_ID
+            print_warn "Could not reach Plex at ${PLEX_URL} — entering library IDs manually."
+            ask "Movies library ID (numeric)" "1" PLEX_LIBRARY_ID
+            ask "TV library ID (numeric, 0 to skip)" "0" PLEX_TV_LIBRARY_ID
         fi
     else
         if [ -z "$PLEX_TOKEN" ]; then
             print_warn "No Plex token provided — skipping auto-discovery."
         fi
-        ask "Plex library ID (numeric)" "1" PLEX_LIBRARY_ID
+        ask "Movies library ID (numeric)" "1" PLEX_LIBRARY_ID
+        ask "TV library ID (numeric, 0 to skip)" "0" PLEX_TV_LIBRARY_ID
     fi
 }
 
@@ -476,7 +490,8 @@ generate_config_json() {
   "plex": {
     "url": "http://127.0.0.1:32400",
     "token": "",
-    "library_id": 0
+    "library_id": 0,
+    "tv_library_id": 0
   },
   "tmdb_api_key": ""
 }
@@ -517,6 +532,10 @@ try:
     cfg['plex']['library_id'] = int("${PLEX_LIBRARY_ID}")
 except ValueError:
     cfg['plex']['library_id'] = 0
+try:
+    cfg['plex']['tv_library_id'] = int("${PLEX_TV_LIBRARY_ID}")
+except ValueError:
+    cfg['plex']['tv_library_id'] = 0
 
 # --- NAT-PMP block ---
 if 'natpmp' not in cfg or not isinstance(cfg.get('natpmp'), dict):
