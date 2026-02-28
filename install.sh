@@ -800,10 +800,27 @@ ensure_go() {
 # ------------------------------------------------------------------------------
 # 5f3. Compile the GoStream binary from source
 # ------------------------------------------------------------------------------
+ensure_swap() {
+    # Go compilation can OOM on Pi with little/no swap — ensure at least 1GB
+    local swap_total
+    swap_total=$(free -m | awk '/^Swap:/ {print $2}')
+    if [ "${swap_total:-0}" -lt 1024 ]; then
+        print_info "Swap < 1 GB detected (${swap_total} MB) — creating 1 GB swapfile for compilation..."
+        if [ ! -f /swapfile ]; then
+            sudo fallocate -l 1G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile >/dev/null
+        fi
+        sudo swapon /swapfile 2>/dev/null || true
+        print_ok "Swapfile active ($(free -m | awk '/^Swap:/ {print $2}') MB total swap)"
+    fi
+}
+
 compile_binary() {
     print_info "Compiling GoStream binary (this takes a few minutes on Pi 4)..."
 
     ensure_go
+    ensure_swap
 
     local src_dir="${SCRIPT_DIR}"
     local out_bin="${INSTALL_DIR}/gostream"
@@ -828,8 +845,9 @@ compile_binary() {
         print_info "No PGO profile — building with -pgo=off (regenerate later for 5-7% CPU gain)"
     fi
 
-    print_info "Building binary (GOARCH=${GO_ARCH})..."
-    GOTOOLCHAIN=local GOARCH="${GO_ARCH}" CGO_ENABLED=1 "$GO_BIN" build ${pgo_flag} -o "${out_bin}" .
+    # -p 2 limits parallel jobs to keep peak RAM under control on Pi 4
+    print_info "Building binary (GOARCH=${GO_ARCH}, -p 2)..."
+    GOTOOLCHAIN=local GOARCH="${GO_ARCH}" CGO_ENABLED=1 "$GO_BIN" build ${pgo_flag} -p 2 -o "${out_bin}" .
 
     chmod +x "${out_bin}"
     print_ok "Binary compiled and deployed: ${out_bin}"
