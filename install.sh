@@ -666,7 +666,7 @@ Group=${SYSTEM_USER}
 WorkingDirectory=${INSTALL_DIR}
 
 # Wait for DNS before starting (required for tracker + blocklist resolution)
-ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5; do nslookup www.google.com >/dev/null 2>&1 && exit 0 || sleep 2; done; exit 1'
+ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5; do getent hosts google.com >/dev/null 2>&1 && exit 0 || sleep 2; done; exit 1'
 
 # FUSE mount cleanup and creation
 ExecStartPre=-/usr/bin/${FUSERMOUNT_CMD} -uz ${FUSE_MOUNT}
