@@ -26,7 +26,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 ### What's included
 
 - **Custom FUSE virtual filesystem** — every `.mkv` is a live torrent, presented to Plex as a real file. Zero bytes stored on disk beyond a 64 MB SSD warmup head per film.
-- **Embedded torrent engine** — GoStorm, a fork of [TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer) + [anacrolix/torrent v1.55](https://github.com/anacrolix/torrent), runs in-process with the FUSE layer. Both upstreams carry targeted bug fixes and streaming-performance patches not present in the originals. Data path is a pure `io.Pipe()` — no HTTP, no TCP, no serialization.
+- **Embedded torrent engine** — GoStorm, a fork of [TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer) + [anacrolix/torrent v1.55](https://github.com/anacrolix/torrent), runs in-process with the FUSE layer — no separate HTTP proxy process. Both upstreams carry targeted bug fixes and streaming-performance patches not present in the originals.
 - **Auto-discovery: Movies** — daily sync pulls trending and popular movies from TMDB (Discover + Popular), finds the best available torrent via Torrentio (4K DV preferred), and registers them automatically. Existing entries are **automatically upgraded** when a higher-quality version becomes available (e.g. 1080p → 4K HDR).
 - **Auto-discovery: TV Series** — weekly sync with fullpack-first season pack strategy, Plex-compatible directory structure.
 - **Plex Watchlist sync** — add a title to your Plex cloud watchlist; it appears in your library within the hour.
@@ -78,7 +78,7 @@ Plex reads `/mnt/gostream-mkv-virtual/movies/Interstellar.mkv`. From Plex's pers
 | **L2** | SSD Warmup Head | 64 MB/file | Instant TTFF on replay — served at 150–200 MB/s from SSD |
 | **L3** | SSD Warmup Tail | 16 MB/file | MKV Cues (seek index) — Plex probes the end of every file before confirming playback |
 
-The BitTorrent engine (GoStorm) runs **inside the same process** as the FUSE layer. Data flows through an `io.Pipe()` in memory — no HTTP, no TCP, no serialization on the hot path. Metadata calls are direct Go function calls.
+The BitTorrent engine (GoStorm) runs **in-process** with the FUSE layer — data flows through an in-memory `io.Pipe()`, skipping HTTP, TCP, and serialization entirely.
 
 What makes this non-trivial: a FUSE filesystem that backs a real directory of static files is straightforward. A FUSE filesystem that must handle non-sequential byte-range requests across hundreds of files, each backed by an independent torrent with variable peer availability, while a Plex scanner hammers every inode in parallel — that required building every subsystem from scratch.
 
@@ -108,7 +108,7 @@ BitTorrent Peers ←→ GoStorm Engine (:8090)
          Plex Media Server libraries
 ```
 
-GoStream runs as a **single process**. The GoStorm BitTorrent engine and the FUSE proxy layer are compiled into one binary and communicate via an in-process `io.Pipe()` — no TCP sockets, no HTTP stack, no serialization on the data path. Metadata operations are direct Go function calls.
+GoStream runs as a **single process** — GoStorm engine and FUSE proxy compiled into one binary, bridged by an in-process `io.Pipe()`. Metadata operations are direct Go function calls.
 
 ### Port Map
 
