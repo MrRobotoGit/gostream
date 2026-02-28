@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">🎬 GoStream</h1>
   <p align="center">
-    <strong>A custom FUSE virtual filesystem where every .mkv is a live torrent. Nothing is ever downloaded.</strong>
+    <strong>The most advanced torrent engine and FUSE virtual filesystem for live streaming to your private Plex library. Forget Real-Debrid.</strong>
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/Platform-Raspberry%20Pi%204-c51a4a?style=flat-square&logo=raspberrypi&logoColor=white" alt="Raspberry Pi 4"/>
