@@ -16,6 +16,12 @@ import (
 	sets "gostream/internal/gostorm/settings"
 )
 
+// saveDebounce prevents redundant BoltDB writes for the same torrent.
+// Critical on USB-attached SSDs (fsync ~10-30ms) and SD cards (50-200ms).
+const saveDebounceInterval = 30 * time.Second
+
+var lastSaveTimes sync.Map // hash string → time.Time
+
 var (
 	bts        *BTServer
 	btsMu      sync.RWMutex
@@ -109,7 +115,26 @@ func AddTorrent(spec *torrent.TorrentSpec, title, poster string, data string, ca
 	return torr, nil
 }
 
+// ForceSaveTorrentToDB bypasses debounce — use only when the torrent is about
+// to be removed (expiry) so the final peer snapshot is always persisted.
+func ForceSaveTorrentToDB(torr *Torrent) {
+	saveTorrentToDB(torr)
+}
+
+// SaveTorrentToDB saves with a 30s debounce per hash to avoid redundant fsyncs.
 func SaveTorrentToDB(torr *Torrent) {
+	hash := torr.Hash()
+	now := time.Now()
+	if last, ok := lastSaveTimes.Load(hash); ok {
+		if now.Sub(last.(time.Time)) < saveDebounceInterval {
+			return // skip — saved recently
+		}
+	}
+	lastSaveTimes.Store(hash, now)
+	saveTorrentToDB(torr)
+}
+
+func saveTorrentToDB(torr *Torrent) {
 	// V255: Persist metadata InfoBytes to DB for instant re-activation.
 	// Without this, TorrentSpec.InfoBytes stays nil (from original magnet parse),
 	// forcing full metadata re-fetch from peers on every Wake() — adding 2-10s to TTFF.

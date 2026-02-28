@@ -165,8 +165,8 @@ func (t *Torrent) UpdateStats() {
 			log.TLogln("Torrent close by timeout", t.TorrentSpec.InfoHash.HexString())
 			// V255: Snapshot peers to DB before drop. At expiry the swarm is fullest
 			// (tracker/DHT have responded). Next Wake() injects these as Trusted peers,
-			// skipping discovery delay.
-			SaveTorrentToDB(t)
+			// skipping discovery delay. Force=true: bypass debounce, this is the final save.
+			ForceSaveTorrentToDB(t)
 		}
 		t.bt.RemoveTorrent(t.Hash())
 		return

@@ -21,7 +21,7 @@ func NewTDB() GoStormDB {
 	if globalBboltDB != nil {
 		return globalBboltDB // Return existing instance
 	}
-	db, err := bolt.Open(filepath.Join(Path, "config.db"), 0o666, &bolt.Options{Timeout: 5 * time.Second})
+	db, err := bolt.Open(filepath.Join(Path, "config.db"), 0o666, &bolt.Options{Timeout: 5 * time.Second, NoSync: true})
 	if err != nil {
 		log.TLogln(err)
 		return nil
