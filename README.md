@@ -26,7 +26,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 ### What's included
 
 - **🎬 Custom FUSE virtual filesystem** — every `.mkv` is a live torrent, presented to Plex as a real file. Zero bytes stored on disk beyond a 64 MB SSD warmup head per film.
-- **⚙️ Embedded torrent engine** — GoStorm (fork of anacrolix/torrent) runs in-process with the FUSE layer. Data path is a pure `io.Pipe()` — no HTTP, no TCP, no serialization.
+- **⚙️ Embedded torrent engine** — GoStorm, a fork of [TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer) + [anacrolix/torrent v1.55](https://github.com/anacrolix/torrent), runs in-process with the FUSE layer. Both upstreams carry targeted bug fixes and streaming-performance patches not present in the originals. Data path is a pure `io.Pipe()` — no HTTP, no TCP, no serialization.
 - **🎥 Auto-discovery: Movies** — daily sync pulls trending and popular movies from TMDB (Discover + Popular), finds the best available torrent via Torrentio (4K DV preferred), and registers them automatically.
 - **📺 Auto-discovery: TV Series** — weekly sync with fullpack-first season pack strategy, Plex-compatible directory structure.
 - **🎯 Plex Watchlist sync** — add a title to your Plex cloud watchlist; it appears in your library within the hour.
@@ -222,9 +222,9 @@ Auto-downloads and periodically refreshes a gzipped BGP/country blocklist. Injec
 
 Binary compiled with `-pgo=auto`. Go 1.24 reads `default.pgo` to inline hot paths and optimize branch prediction from real production profiling data. On Pi 4 Cortex-A72 (no hardware AES/SHA1): **~5–7% CPU reduction** from PGO alone.
 
-### 11. 🔧 GoStorm Engine — Deep Fork
+### 11. 🔧 GoStorm Engine — Deep Fork of TorrServer Matrix + anacrolix/torrent
 
-GoStorm is a fork of anacrolix/torrent v1.55 + TorrServer, with **substantial modifications**:
+GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer)** (BitTorrent management layer) and **[anacrolix/torrent v1.55](https://github.com/anacrolix/torrent)** (peer protocol engine). Both upstreams have been patched extensively for streaming correctness and performance — fixes that are not present in the original projects:
 
 <details>
 <summary><b>Click to expand — 15+ targeted optimizations</b></summary>
