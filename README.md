@@ -41,7 +41,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 <tr>
 <td align="center"><b>⚡ 0.1 s</b><br/>Warm start (SSD cache)</td>
 <td align="center"><b>📉 20% CPU</b><br/>4K HDR on Pi 4</td>
-<td align="center"><b>🔥 200+ Mbps</b><br/>Peak throughput</td>
+<td align="center"><b>🔥 400+ Mbps</b><br/>Peak throughput</td>
 <td align="center"><b>🎯 −87%</b><br/>CPU vs baseline</td>
 <td align="center"><b>💾 33 MB</b><br/>Single binary</td>
 </tr>
@@ -261,7 +261,7 @@ GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrSe
 | Binary size | **33 MB** (60% smaller than legacy builds) |
 | Memory footprint (read-ahead) | Deterministic 256 MB |
 | GOMEMLIMIT | 2200 MiB |
-| Peak throughput (NAT-PMP + fast seeder) | **200+ Mbps** |
+| Peak throughput (NAT-PMP + fast seeder) | **400+ Mbps** |
 | Plex scan peer count | ~6 total (was ~15,000 before fix) |
 | Inode shard count | 32 (collision-protected) |
 | Warmup cache capacity | ~150 films at 64 MB each (32 GB) |
