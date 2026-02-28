@@ -669,7 +669,7 @@ install_services() {
     sudo tee /etc/systemd/system/gostream.service > /dev/null <<SERVICE_EOF
 [Unit]
 Description=GoStream + GoStorm (Unified Streaming Engine)
-After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target
+After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target wg-quick@wg0.service
 Wants=network-online.target
 StartLimitIntervalSec=0
 
