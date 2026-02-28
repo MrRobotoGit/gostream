@@ -648,6 +648,8 @@ Environment="GOGC=100"
 
 ## 🔄 Sync Scripts
 
+![Plex library populated by sync scripts](docs/screenshots/library.png)
+
 All scripts in `scripts/` resolve `config.json` from the parent directory automatically. Override with `MKV_PROXY_CONFIG_PATH`.
 
 ### `gostorm-sync-complete.py` — Daily Movie Sync
