@@ -25,17 +25,17 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 ### What's included
 
-- **Custom FUSE virtual filesystem** — every `.mkv` is a live torrent, presented to Plex as a real file. Zero bytes stored on disk beyond a 64 MB SSD warmup head per film.
-- **Embedded torrent engine** — GoStorm, a fork of [TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer) + [anacrolix/torrent v1.55](https://github.com/anacrolix/torrent), runs in-process with the FUSE layer — no separate HTTP proxy process. Both upstreams carry targeted bug fixes and streaming-performance patches not present in the originals.
-- **Auto-discovery: Movies** — daily sync pulls trending and popular movies from TMDB (Discover + Popular), finds the best available torrent via Torrentio (4K DV preferred), and registers them automatically. Existing entries are **automatically upgraded** when a higher-quality version becomes available (e.g. 1080p → 4K HDR).
-- **Auto-discovery: TV Series** — weekly sync with fullpack-first season pack strategy, Plex-compatible directory structure.
-- **Plex Watchlist sync** — add a title to your Plex cloud watchlist; it appears in your library within the hour.
-- **Native NAT-PMP** — for setups routing BitTorrent through WireGuard. Requests an inbound port mapping from the VPN gateway, installs `iptables REDIRECT` rules, and updates the engine — no restart, no scripts.
-- **Peer Blocklist** — ~700,000 IP ranges auto-downloaded and refreshed every 24 h. Injected directly into the torrent engine before any connection attempt.
-- **Plex Webhook integration** — `media.play` activates Priority Mode (aggressive piece prioritization). IMDB-ID extracted from raw payload via regex — works even when Plex sends localized titles.
-- **Embedded Control Panel** — full web UI at `:8096/control`, compiled into the binary. Adjust all FUSE and engine settings live.
-- **Health Monitor Dashboard** — real-time speed graph, active stream panel with movie poster + quality badges, sync controls, system stats.
-- **Single binary** — GoStorm engine + FUSE proxy + metrics + control panel + webhook receiver, all in one `gostream` executable.
+- **Custom FUSE virtual filesystem**: every `.mkv` is a live torrent presented to Plex as a real file. Nothing is stored on disk beyond a 64 MB per-film SSD warmup head.
+- The embedded torrent engine is **GoStorm**, a fork of [TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer) and [anacrolix/torrent v1.55](https://github.com/anacrolix/torrent), running in-process with the FUSE layer (no separate HTTP proxy). Both upstreams carry targeted streaming patches not present in the originals.
+- **Movie auto-discovery** pulls trending and popular titles from TMDB daily, finds the best torrent via Torrentio (4K DV preferred), and registers them automatically. Existing entries are **upgraded** when a better version becomes available (e.g. 1080p → 4K HDR).
+- **TV Series sync** runs weekly with a fullpack-first season pack strategy and a Plex-compatible directory structure.
+- Add a title to your **Plex cloud watchlist** and it shows up in your library within the hour.
+- **NAT-PMP** for WireGuard setups: GoStream requests an inbound port mapping from the VPN gateway and installs `iptables REDIRECT` rules, all without a restart.
+- A **peer blocklist** of ~700,000 IP ranges is downloaded on startup and refreshed every 24 hours, injected into the torrent engine before any connection is made.
+- **Plex Webhook integration**: `media.play` triggers Priority Mode with aggressive piece prioritization. IMDB-ID is extracted from the raw payload via regex, so it works even when Plex sends localized titles.
+- The **embedded Control Panel** at `:8096/control` lets you adjust all FUSE and engine settings live, compiled directly into the binary.
+- The **Health Monitor Dashboard** shows a real-time speed graph, an active stream panel with movie poster and quality badges, sync controls, and system stats.
+- Everything ships as a **single binary**: GoStorm engine, FUSE proxy, metrics, control panel, and webhook receiver in one `gostream` executable.
 
 ---
 
@@ -127,11 +127,11 @@ GoStream runs as a **single process** — GoStorm engine and FUSE proxy compiled
 
 ### 2. Two-Layer SSD Warmup Cache
 
-- **Head cache** — The first 64 MB of each file is written to SSD on first play. Repeat TTFF: **< 0.01 s** (SSD at 150–200 MB/s, vs. 2–4 s for cold torrent activation).
-- **Tail cache** — The last 16 MB is cached separately. MKV files store their Cues (seek index) near the end. Without tail cache, Plex probes the end of the file before confirming playback and the seek bar renders as unavailable.
-- **Quota**: 32 GB default, LRU eviction by write-time mtime (~150 films cached simultaneously).
-- **Auto-population**: Plex library scans read the first 1 MB of every file — enough to populate warmup heads automatically; no manual warming step.
-- **Storage**: configurable via Control Panel → GoStorm settings → *Warmup path* field.
+The **head cache** stores the first 64 MB of each file on SSD on first play. On repeat playback, TTFF drops to **< 0.01 s** (SSD reads at 150–200 MB/s, compared to 2–4 s for cold torrent activation).
+
+The **tail cache** stores the last 16 MB separately. MKV files keep their Cues (seek index) near the end of the file, and Plex probes that region before confirming playback. Without tail cache, the seek bar renders as unavailable.
+
+The default quota is 32 GB with LRU eviction by write time, enough to keep around 150 films cached simultaneously. Plex library scans read the first 1 MB of every file, which is enough to populate the head cache automatically — no manual warming step needed. The warmup path is configurable via Control Panel → GoStorm settings.
 
 ### 3. Plex Webhook Integration & Smart Streaming
 
@@ -158,7 +158,7 @@ Two read modes, automatically managed:
 | **Responsive** *(default)* | Data served before SHA1 verification — instant start | Normal operation |
 | **Strict** | Only SHA1-verified pieces served | Automatically activated for 60 s on corruption detection |
 
-If a corrupt piece is detected (`MarkNotComplete()`), the Adaptive Shield activates Strict Mode for 60 seconds, then automatically restores Responsive. Transition tracked via atomic boolean — **zero mutex contention** on the hot read path.
+When a corrupt piece is detected (`MarkNotComplete()`), the Adaptive Shield switches to Strict Mode for 60 seconds and then automatically restores Responsive. The mode transition uses an atomic boolean, so there is no mutex contention on the hot read path.
 
 ### 5. Seek-Master Architecture
 
@@ -174,11 +174,11 @@ Accurate, low-latency seeking in large 4K files required five coordinated fixes:
 
 ### 6. 32-Shard Read-Ahead Cache
 
-The 256 MB read-ahead budget is distributed across **32 independent shards**, keyed by hash of file path + offset. Each shard has its own LRU and mutex. This eliminates global lock contention when multiple Plex sessions or scanner threads read concurrently. All pool operations use **defensive copies** on both `Put()` and `Get()` to prevent use-after-free races.
+The 256 MB read-ahead budget is split across **32 independent shards**, each keyed by hash of file path and offset, each with its own LRU and mutex. Multiple Plex sessions and scanner threads read concurrently without contending on a single lock. Both `Put()` and `Get()` use **defensive copies** to prevent use-after-free races from channel-pool reuse.
 
 ### 7. Optional Automation Layer
 
-The engine is content-agnostic — torrents can be added manually via API. The included Python scripts are optional convenience automation on top:
+The engine is content-agnostic; torrents can be added manually via API. The included Python scripts are optional automation layered on top:
 
 | Script | Trigger | What it does |
 |--------|---------|-------------|
@@ -192,17 +192,15 @@ The engine is content-agnostic — torrents can be added manually via API. The i
 
 ### 8. NAT-PMP Native VPN Port Forwarding
 
-Integrated as a sidecar goroutine. On startup (and periodically), GoStream requests a TCP+UDP port mapping from the VPN gateway via NAT-PMP, installs `iptables PREROUTING REDIRECT` rules, and updates GoStorm's `PeersListenPort` — all without a restart.
-
-When routing BitTorrent traffic through a WireGuard VPN, the home router's port forwarding rules are bypassed by the tunnel. NAT-PMP requests an inbound port mapping directly from the VPN gateway, restoring peer reachability without manual router configuration.
+When BitTorrent traffic is routed through a WireGuard VPN, the home router's port forwarding rules are bypassed by the tunnel. GoStream runs a NAT-PMP sidecar that periodically requests a TCP+UDP port mapping from the VPN gateway, installs `iptables PREROUTING REDIRECT` rules, and updates GoStorm's listen port — all without a restart.
 
 ### 9. IP Blocklist ~700k Ranges
 
-Auto-downloads and periodically refreshes a gzipped BGP/country blocklist. Injected directly into anacrolix/torrent's IP filter — blocks known-bad actors before any connection attempt. Refresh: 24 h.
+GoStream downloads a gzipped BGP/country blocklist on startup and refreshes it every 24 hours. The ranges are injected directly into anacrolix/torrent's IP filter, so known-bad actors are blocked before any connection attempt.
 
 ### 10. Profile-Guided Optimization (PGO)
 
-Binary compiled with `-pgo=auto`. Go 1.24 reads `default.pgo` to inline hot paths and optimize branch prediction from real production profiling data. On Pi 4 Cortex-A72 (no hardware AES/SHA1): **~5–7% CPU reduction** from PGO alone.
+The binary is compiled with `-pgo=auto`. Go 1.24 reads `default.pgo` to inline hot paths and optimize branch prediction using real production profiling data. On Pi 4 Cortex-A72 (no hardware AES/SHA1), PGO alone accounts for **~5–7% CPU reduction**.
 
 ### 11. GoStorm Engine Deep Fork of TorrServer Matrix + anacrolix/torrent
 
