@@ -2559,6 +2559,38 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			return true
 		})
 
+		// Pass 1c: IMDB bootstrap — if webhookImdbID is available but no state has it yet,
+		// find the unique registered path of the matching library type with empty ImdbID.
+		// One-time bootstrap: saves webhookImdbID into state so future sessions match via 0a.
+		if exactMatch == "" && webhookImdbID != "" {
+			sectionDir := ""
+			switch payload.Metadata.LibrarySectionType {
+			case "show":
+				sectionDir = "/tv/"
+			case "movie":
+				sectionDir = "/movies/"
+			}
+			if sectionDir != "" {
+				var bootPath string
+				var bootState *PlaybackState
+				bootCount := 0
+				playbackRegistry.Range(func(key, value interface{}) bool {
+					path := key.(string)
+					state := value.(*PlaybackState)
+					if strings.Contains(path, sectionDir) && state.ImdbID == "" {
+						bootPath = path
+						bootState = state
+						bootCount++
+					}
+					return true
+				})
+				if bootCount == 1 {
+					exactMatch = bootPath
+					exactState = bootState
+				}
+			}
+		}
+
 		// Pass 2: Fuzzy matches only if no exact match found
 		if exactMatch == "" {
 			var bestMatch string
@@ -2620,6 +2652,12 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			exactState.SetHealthy(true)
 			exactState.mu.Lock()
 			exactState.IsStopped = false // V272: Reset stop flag on re-play
+			// V305: Cache webhookImdbID into state if missing — enables fast IMDB match (0a)
+			// on future sessions for files created without IMDB ID in line 4.
+			if exactState.ImdbID == "" && webhookImdbID != "" {
+				exactState.ImdbID = webhookImdbID
+				logger.Printf("[PLEX] IMDB ID cached for future matching: %s → %s", filepath.Base(exactMatch), webhookImdbID)
+			}
 			exactState.mu.Unlock()
 			logger.Printf("[PLEX] Playback confirmed by webhook for: %s", filepath.Base(exactMatch))
 
