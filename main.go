@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	server "gostream/internal/gostorm"
 	"gostream/internal/gostorm/settings"
 	torrstor "gostream/internal/gostorm/torr/storage/torrstor"
 	tsutils "gostream/internal/gostorm/utils"
 	"gostream/internal/gostorm/web"
 	"hash/fnv"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -1268,12 +1268,11 @@ func (h *MkvHandle) nativePumpChunk(r *NativeReader, offset, chunkSize, playerOf
 	budget := globalConfig.ReadAheadBudget
 	diff := offset - playerOff
 
-	// V260: Emergency Overdrive.
-	// If the player is still in the Disk Warmup zone (<128MB),
-	// we DISABLE throttling. The pump must run at full speed to bridge the handover.
-	if playerOff < warmupFileSize {
-		// No sleep, full speed ahead.
-	} else if diff > budget {
+	// V260: Emergency Overdrive REMOVED (Ring Buffer Exhaustion Fix).
+	// Previously, we disabled throttling if playerOff < warmupFileSize.
+	// This caused the pump to race ahead, overwrite the raCache ring buffer,
+	// and cause cache misses at the handover point (64MB).
+	if diff > budget {
 		// Hard limit reached: Wait for player to advance.
 		time.Sleep(100 * time.Millisecond)
 		return false, offset
@@ -1295,6 +1294,16 @@ func (h *MkvHandle) nativePumpChunk(r *NativeReader, offset, chunkSize, playerOf
 			diskWarmup.WriteChunk(h.hash, h.fileID, data, offset)
 		}
 		return false, offset + chunkSize
+	}
+
+	// V303: Skip torrent read for offsets already covered by disk warmup.
+	// Pump jumps to warmupFileSize instantly; player reads warmup from SSD.
+	// Eliminates raCache miss at warmup handoff that caused playback stutters.
+	if diskWarmup != nil && h.hash != "" && offset < warmupFileSize {
+		warmupCoverage := diskWarmup.GetAvailableRange(h.hash, h.fileID)
+		if warmupCoverage >= offset+chunkSize {
+			return false, offset + chunkSize
+		}
 	}
 
 	end := offset + chunkSize
@@ -1421,11 +1430,9 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 
 	// V256: Disk warmup cache — serves first 128MB from SSD while torrent activates.
 	// V261: Read directly into dest — no pool buffer, no 2MB over-read.
-	// Skip warmup if this read would straddle the 128MB boundary (partial read
-	// confuses players → micro-stutter). Let raCache serve the full read instead.
-	if diskWarmup != nil && h.hash != "" && off < warmupFileSize && off+int64(len(dest)) <= warmupFileSize {
+	if diskWarmup != nil && h.hash != "" && off < warmupFileSize {
 		n, _ := diskWarmup.ReadAt(h.hash, h.fileID, dest, off)
-		if n == len(dest) {
+		if n > 0 {
 			timing.UsedCache = true
 			timing.BytesRead = n
 			if off == 0 {
@@ -1451,7 +1458,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		// V284 doesn't jump the pump to the cold end-of-file on the next tick.
 		atomic.StoreInt64(&h.lastOff, prevOff)
 		n, _ := diskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
-		if n == len(dest) {
+		if n > 0 {
 			timing.UsedCache = true
 			timing.BytesRead = n
 			h.mu.Lock()
