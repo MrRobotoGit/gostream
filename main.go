@@ -828,14 +828,12 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	}
 
 	// V265: Dual-state Wake (Async with Warmup / Sync without).
+	// V304: Always sync Wake, even with warmup. With InfoBytes cached, Wake() returns
+	// in ~50ms (GotInfo instant + PeerAddrs injected). This ensures peer connections
+	// are established before Plex sends Read() at the resume position (cold seek).
+	// Previously: async Wake + warmup = Open() instant but FetchBlock timeout on resume.
 	if nativeBridge != nil && magnetCandidate != "" {
-		if hasWarmup {
-			safeGo(func() {
-				_ = nativeBridge.Wake(magnetCandidate, urlFileIdx)
-			})
-		} else {
-			_ = nativeBridge.Wake(magnetCandidate, urlFileIdx)
-		}
+		_ = nativeBridge.Wake(magnetCandidate, urlFileIdx)
 	}
 
 	// V148-Fix: Track both movies and TV shows for priority
