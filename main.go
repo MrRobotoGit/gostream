@@ -1446,7 +1446,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	// V265: Tail warmup — serve last 16MB from SSD for MKV Cues/seek index.
 	// V560: Discovery-Only Tail Warmup. isTailProbe=true means off is in tail area AND
 	// ConfirmedAt.IsZero(). Post-confirmation tail reads fall through to the pump for fresh data.
-	if isTailProbe {
+	if isTailProbe && diskWarmup != nil {
 		// V560-Fix: Tail reads must NOT steer the pump. Restore lastOff to prevOff so
 		// V284 doesn't jump the pump to the cold end-of-file on the next tick.
 		atomic.StoreInt64(&h.lastOff, prevOff)
