@@ -62,6 +62,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - [Sync Scripts](#sync-scripts)
 - [Plex & Samba Setup](#plex-and-samba-setup)
 - [Build from Source](#build-from-source)
+- [Docker](#docker)
 - [API Reference](#api-quick-reference)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -747,6 +748,38 @@ sudo systemctl start gostream
 wget https://go.dev/dl/go1.24.0.linux-arm64.tar.gz
 sudo tar -C /usr/local -xzf go1.24.0.linux-arm64.tar.gz
 ```
+
+---
+
+## Docker
+
+> [!IMPORTANT]
+> GoStream mounts a FUSE filesystem at startup. Docker blocks this syscall by default — the container requires elevated privileges to run.
+
+**Build** (from the repository root):
+
+```bash
+docker build -f docker/Dockerfile -t gostream .
+```
+
+**Run:**
+
+```bash
+docker run -d \
+  --device /dev/fuse \
+  --cap-add SYS_ADMIN \
+  --cap-add NET_ADMIN \
+  -v /path/to/config.json:/config.json:ro \
+  -v /mnt/gostream-mkv-real:/mnt/gostream-mkv-real \
+  -v /mnt/gostream-mkv-virtual:/mnt/gostream-mkv-virtual \
+  -p 8090:8090 \
+  -p 8096:8096 \
+  gostream
+```
+
+Or use `--privileged` as a simpler alternative to the individual capabilities (e.g. on a Raspberry Pi where the container is fully trusted).
+
+`config.json` must be volume-mounted at `/config.json` (the default `MKV_PROXY_CONFIG_PATH`). Use `config.json.example` as the starting point.
 
 ---
 
