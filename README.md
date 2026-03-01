@@ -30,7 +30,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - **Auto-discovery: Movies** — daily sync pulls trending and popular movies from TMDB (Discover + Popular), finds the best available torrent via Torrentio (4K DV preferred), and registers them automatically. Existing entries are **automatically upgraded** when a higher-quality version becomes available (e.g. 1080p → 4K HDR).
 - **Auto-discovery: TV Series** — weekly sync with fullpack-first season pack strategy, Plex-compatible directory structure.
 - **Plex Watchlist sync** — add a title to your Plex cloud watchlist; it appears in your library within the hour.
-- **Native NAT-PMP** — built-in WireGuard port forwarding. Requests a port mapping from the VPN gateway, installs `iptables REDIRECT` rules, and updates the engine — no restart, no scripts. Turns 8 peers into 20+.
+- **Native NAT-PMP** — for setups routing BitTorrent through WireGuard. Requests an inbound port mapping from the VPN gateway, installs `iptables REDIRECT` rules, and updates the engine — no restart, no scripts.
 - **Peer Blocklist** — ~700,000 IP ranges auto-downloaded and refreshed every 24 h. Injected directly into the torrent engine before any connection attempt.
 - **Plex Webhook integration** — `media.play` activates Priority Mode (aggressive piece prioritization). IMDB-ID extracted from raw payload via regex — works even when Plex sends localized titles.
 - **Embedded Control Panel** — full web UI at `:8096/control`, compiled into the binary. Adjust all FUSE and engine settings live.
@@ -194,11 +194,7 @@ The engine is content-agnostic — torrents can be added manually via API. The i
 
 Integrated as a sidecar goroutine. On startup (and periodically), GoStream requests a TCP+UDP port mapping from the VPN gateway via NAT-PMP, installs `iptables PREROUTING REDIRECT` rules, and updates GoStorm's `PeersListenPort` — all without a restart.
 
-| Configuration | Speed | Peers |
-|--------------|-------|-------|
-| WireGuard only | 3–6 Mbps | 8–10 |
-| **WireGuard + NAT-PMP** | **15–21 Mbps** | **19–20** |
-| AMZN WEB-DL torrents | 140–198 Mbps | 23–25 |
+When routing BitTorrent traffic through a WireGuard VPN, the home router's port forwarding rules are bypassed by the tunnel. NAT-PMP requests an inbound port mapping directly from the VPN gateway, restoring peer reachability without manual router configuration.
 
 ### 9. IP Blocklist ~700k Ranges
 
@@ -247,7 +243,7 @@ GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrSe
 | Binary size | **33 MB** (60% smaller than legacy builds) |
 | Memory footprint (read-ahead) | Deterministic 256 MB |
 | GOMEMLIMIT | 2200 MiB |
-| Peak throughput (NAT-PMP + fast seeder) | **400+ Mbps** |
+| Peak throughput (fast seeder) | **400+ Mbps** |
 | Plex scan peer count | ~6 total (was ~15,000 before fix) |
 | Inode shard count | 32 (collision-protected) |
 | Warmup cache capacity | ~150 films at 64 MB each (32 GB) |
@@ -814,7 +810,7 @@ curl -s -X POST -H 'Content-Type: application/json' \
   jq '.[] | {title: .title[:50], speed_mbps: ((.download_speed//0)/1048576|round), peers: (.active_peers//0)}'
 ```
 
-If peer count < 3, check NAT-PMP configuration.
+If peer count < 3 and you are routing through WireGuard, check NAT-PMP configuration.
 
 </details>
 
@@ -837,7 +833,7 @@ ps aux | grep -E 'smbd|gostream|fuse' | awk '$8 == "D"'
 <details>
 <summary><b>Few seeders or slow downloads</b></summary>
 
-Enable NAT-PMP in `config.json`:
+If you are routing BitTorrent traffic through WireGuard, enable NAT-PMP to restore inbound port reachability through the VPN gateway:
 ```json
 "natpmp": {
   "enabled": true,
@@ -846,7 +842,7 @@ Enable NAT-PMP in `config.json`:
 }
 ```
 
-Without an open inbound port, peers cannot initiate connections — the engine relies solely on outbound connections.
+Without an open inbound port, peers cannot initiate connections — the engine relies solely on outbound connections. If you are not using a VPN, configure port forwarding on your router instead.
 
 </details>
 
