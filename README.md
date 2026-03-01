@@ -25,7 +25,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 ### What's included
 
-- **Custom FUSE virtual filesystem**: every `.mkv` is a live torrent presented to Plex as a real file. Nothing is stored on disk beyond a 64 MB per-film SSD warmup head.
+- **Custom FUSE virtual filesystem**: every `.mkv` is a live torrent presented to Plex as a real file. No temp files, no persistent downloads — torrent data never touches the disk.
 - The embedded torrent engine is **GoStorm**, a fork of [TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer) and [anacrolix/torrent v1.55](https://github.com/anacrolix/torrent), running in-process with the FUSE layer (no separate HTTP proxy). Both upstreams carry targeted streaming patches not present in the originals.
 - **Movie auto-discovery** pulls trending and popular titles from TMDB daily, finds the best torrent via Torrentio (4K DV preferred), and registers them automatically. Existing entries are **upgraded** when a better version becomes available (e.g. 1080p → 4K HDR).
 - **TV Series sync** runs weekly with a fullpack-first season pack strategy and a Plex-compatible directory structure.
@@ -75,8 +75,8 @@ Plex reads `/mnt/gostream-mkv-virtual/movies/Interstellar.mkv`. From Plex's pers
 | Layer | What | Size | Purpose |
 |-------|------|------|---------|
 | **L1** | In-memory Read-Ahead | 256 MB | 32-shard concurrent buffer with per-shard LRU |
-| **L2** | SSD Warmup Head | 64 MB/file | Instant TTFF on replay — served at 150–200 MB/s from SSD |
-| **L3** | SSD Warmup Tail | 16 MB/file | MKV Cues (seek index) — Plex probes the end of every file before confirming playback |
+| **L2** *(optional)* | SSD Warmup Head | 64 MB/file | Instant TTFF on repeat playback — served at 150–200 MB/s from SSD |
+| **L3** *(optional)* | SSD Warmup Tail | 16 MB/file | MKV Cues (seek index) — Plex probes the end of every file before confirming playback |
 
 What makes this non-trivial: a FUSE filesystem that backs a real directory of static files is straightforward. A FUSE filesystem that must handle non-sequential byte-range requests across hundreds of files, each backed by an independent torrent with variable peer availability, while a Plex scanner hammers every inode in parallel — that required building every subsystem from scratch.
 
@@ -125,13 +125,15 @@ BitTorrent Peers ←→ GoStorm Engine (:8090)
 
 GoStream runs as a **single process** — GoStorm engine and FUSE proxy compiled into one binary. When Plex reads a `.mkv` byte range, the FUSE layer calls directly into GoStorm via an in-memory `io.Pipe()`: no TCP round-trip, no HTTP header parsing, no serialization, no proxy overhead. Metadata operations are direct Go function calls. This eliminates the network RTT that causes stuttering in every HTTP-based torrent streaming proxy on constrained hardware.
 
-### 2. Two-Layer SSD Warmup Cache
+### 2. Two-Layer SSD Warmup Cache *(optional)*
 
-The **head cache** stores the first 64 MB of each file on SSD on first play. On repeat playback, TTFF drops to **< 0.01 s** (SSD reads at 150–200 MB/s, compared to 2–4 s for cold torrent activation).
+An optional SSD cache that improves performance for repeat playback. It can be enabled and configured in the Control Panel → GoStorm settings, and is independent of the core streaming path — GoStream works without it, just with a longer cold-start time.
 
-The **tail cache** stores the last 16 MB separately. MKV files keep their Cues (seek index) near the end of the file, and Plex probes that region before confirming playback. Without tail cache, the seek bar renders as unavailable.
+When enabled, the **head cache** stores the first 64 MB of each file on SSD on first play. On repeat playback, TTFF drops to **< 0.01 s** (SSD reads at 150–200 MB/s, compared to 2–4 s for cold torrent activation).
 
-The default quota is 32 GB with LRU eviction by write time, enough to keep around 150 films cached simultaneously. Plex library scans read the first 1 MB of every file, which is enough to populate the head cache automatically — no manual warming step needed. The warmup path is configurable via Control Panel → GoStorm settings.
+The **tail cache** stores the last 16 MB separately. MKV files keep their Cues (seek index) near the end, and Plex probes that region before confirming playback. Without tail cache, the seek bar may render as unavailable on first open.
+
+The default quota is 32 GB with LRU eviction by write time, enough for around 150 films. Plex library scans read the first 1 MB of every file, which is enough to populate the head cache automatically — no manual warming needed.
 
 ### 3. Plex Webhook Integration & Smart Streaming
 
@@ -351,12 +353,12 @@ The script fetches popular films from TMDB, finds the best available torrent for
 
 ```
 1. Plex requests /mnt/gostream-mkv-virtual/movies/Interstellar.mkv
-2. FUSE Open() triggers Wake() — GoStorm activates the torrent (instant with warmup HIT)
-3. Plex metadata probes → served from SSD head warmup cache (< 0.01 s)
-4. Plex probes MKV Cues at end → served from SSD tail cache
+2. FUSE Open() triggers Wake() — GoStorm activates the torrent
+3. Plex metadata probes → served from SSD warmup cache if enabled, otherwise from the torrent pump
+4. Plex probes MKV Cues at end → served from SSD tail cache if enabled
 5. Plex sends media.play webhook → GoStream activates Priority Mode
 6. Streaming reads → served from Read-Ahead Cache or Native Bridge pump
-7. Playback begins in 0.1–0.5 s ✨
+7. Playback begins (0.1–0.5 s with warmup, 2–4 s cold) ✨
 ```
 
 </details>
