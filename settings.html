@@ -474,7 +474,10 @@
         <header>
             <h1>GoStream <span>Control</span></h1>
             <div class="header-controls">
-                <a href="https://github.com/MrRobotoGit/gostream" target="_blank" rel="noopener" title="Star on GitHub"><img src="https://img.shields.io/github/stars/MrRobotoGit/gostream?style=social" alt="Star on GitHub" style="vertical-align:middle;"></a>
+                <a href="https://github.com/MrRobotoGit/gostream" target="_blank" rel="noopener"
+                    title="Star on GitHub"><img
+                        src="https://img.shields.io/github/stars/MrRobotoGit/gostream?style=social" alt="Star on GitHub"
+                        style="vertical-align:middle;"></a>
                 <button class="btn-restart" id="btn-restart" onclick="restartGoStream()">Restart</button>
                 <div class="mode-toggle">
                     <button class="active" onclick="setMode('simple')">Simple</button>
@@ -660,7 +663,7 @@
                         </div>
                     </div>
 
-                    <button type="submit" class="btn btn-primary">Save Engine Config</button>
+                    <button type="submit" class="btn btn-primary">Save Config</button>
                     <div id="gostream-status" class="status-msg"></div>
                 </form>
             </div>
@@ -816,15 +819,20 @@
                                 <div class="switch-grid">
                                     <div class="switch-item">
                                         <div><span>Smart Responsive Mode</span>
-                                            <div class="hint">Enables FAST mode: serves data without waiting for full piece verification.
+                                            <div class="hint">Enables FAST mode: serves data without waiting for full
+                                                piece verification.
                                                 Pair with Adaptive Shield to auto-protect against corruption.</div>
-                                        </div><label class="switch"><input type="checkbox" name="responsiveMode" onchange="updateAdaptiveShieldState()"><span
+                                        </div><label class="switch"><input type="checkbox" name="responsiveMode"
+                                                onchange="updateAdaptiveShieldState()"><span
                                                 class="slider"></span></label>
                                     </div>
 
                                     <div class="switch-item">
-                                        <div><span>Adaptive Shield <span style="display:inline-block;font-size:9px;font-weight:600;letter-spacing:.4px;padding:1px 5px;border-radius:3px;background:rgba(245,158,11,.15);color:#d97706;vertical-align:middle;margin-left:4px;">EXPERIMENTAL</span></span>
-                                            <div class="hint">Auto-switches to Strict Mode when piece corruption is detected.<br>Disable only if seeders are stable and shield causes unnecessary slowdowns.</div>
+                                        <div><span>Adaptive Shield <span
+                                                    style="display:inline-block;font-size:9px;font-weight:600;letter-spacing:.4px;padding:1px 5px;border-radius:3px;background:rgba(245,158,11,.15);color:#d97706;vertical-align:middle;margin-left:4px;">EXPERIMENTAL</span></span>
+                                            <div class="hint">Auto-switches to Strict Mode when piece corruption is
+                                                detected.<br>Disable only if seeders are stable and shield causes
+                                                unnecessary slowdowns.</div>
                                         </div><label class="switch"><input type="checkbox" name="adaptiveShield"><span
                                                 class="slider"></span></label>
                                     </div>
@@ -840,7 +848,7 @@
                         </div>
                     </div>
 
-                    <button type="submit" class="btn btn-primary">Apply All Core Settings</button>
+                    <button type="submit" class="btn btn-primary">Apply Settings</button>
                     <div id="gostorm-status" class="status-msg"></div>
                 </form>
             </div>
