@@ -907,9 +907,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	if isNative {
 		h.hash = finalHash
 		h.fileID = fileIdx
-
-		// V264: Simplified proactive pump start using centralized method
-		h.startNativePump(finalHash, fileIdx)
+		// V310: pump starts lazily on first real Read() to anchor to player position
 	}
 
 	// V182: Register for cleanup
@@ -936,8 +934,9 @@ type MkvHandle struct {
 	mu           sync.Mutex // V227: Protecting activity and timing fields
 	pumpCancel   context.CancelFunc
 	hasSlot      bool
-	isWatching   bool // V258: Handle is attached to a shared pump
-	hasWarmup    bool // V272: True if both head+tail warmup available at Open time
+	isWatching   bool      // V258: Handle is attached to a shared pump
+	hasWarmup    bool      // V272: True if both head+tail warmup available at Open time
+	pumpOnce     sync.Once // V310: lazy pump start on first real Read()
 }
 
 // V264: startNativePump centralizes the logic for acquiring a slot and starting the background pump.
@@ -1097,6 +1096,23 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			logger.Printf("[V700] New handle: reset stale MaxCachedOffset %.1fMB → 0",
 				float64(resumeOffset)/(1<<20))
 			resumeOffset = 0
+		}
+
+		// V310: Resume anchor — if the player is significantly ahead of pumpStart
+		// (resume after cache eviction), anchor the pump to the player's position.
+		// This eliminates priority competition in anacrolix between pump (0MB) and
+		// FetchBlock (e.g. 800MB) that causes stuttering on resume.
+		{
+			chunkSize := int64(globalConfig.ReadAheadBase)
+			if chunkSize == 0 {
+				chunkSize = 16 * 1024 * 1024
+			}
+			if raV310 := atomic.LoadInt64(&h.lastOff); raV310 > 0 && resumeOffset+chunkSize < raV310 {
+				pumpStartV310 := (raV310 / chunkSize) * chunkSize
+				logger.Printf("[V310] Resume anchor: pump start → %dMB (player at %dMB)",
+					pumpStartV310/(1024*1024), raV310/(1024*1024))
+				resumeOffset = pumpStartV310
+			}
 		}
 
 		if resumeOffset > 0 {
@@ -1381,11 +1397,10 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			h.fileID = fileID
 			logger.Printf("[LateResolution] Recovered hash for %s: %s", filepath.Base(h.path), h.hash[:8])
 
-			// V264: Late Pump Rescue
-			// We just resolved the hash! If we don't have a slot yet, start the pump now.
-			if !h.hasSlot {
-				go h.startNativePump(h.hash, h.fileID)
-			}
+			// V264: Late Pump Rescue (via V310 pumpOnce — ensures single start with correct anchor)
+			go h.pumpOnce.Do(func() {
+				h.startNativePump(h.hash, h.fileID)
+			})
 		}
 	}
 
@@ -1436,6 +1451,14 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		torrstor.ResetShield()
 		logger.Printf("[V286] Interrupt pump for seek+shield reset: %dMB → %dMB",
 			prevOff/(1024*1024), off/(1024*1024))
+	}
+
+	// V310: Lazy pump start — fires once on first non-tail Read(), with lastOff already
+	// set to the player's actual position (used as resume anchor in startNativePump).
+	if h.hash != "" && !isTailProbe {
+		h.pumpOnce.Do(func() {
+			h.startNativePump(h.hash, h.fileID)
+		})
 	}
 
 	// V256: Disk warmup cache — serves first 128MB from SSD while torrent activates.
