@@ -102,7 +102,7 @@ func runTuningCycle(aiURL string) {
 	bufferStatus := "FRESH"
 	if isStaleBuffer { bufferStatus = "STALE (Ignore it)" }
 
-	contextStr := fmt.Sprintf("Fiber Optic, 4K Stream, File:%.1fGB, ActiveTorrents:%d, TotalDL:%.1fMB/s, Buffer:%s", 
+	contextStr := fmt.Sprintf("Fiber Optic, 4K Stream, File:%.1fGB, ActiveTorrents:%d, TotalDLSpeed:%.1fMB/s, Buffer:%s", 
 		fileSizeGB, realActiveCount, lastKnownTotalSpeed, bufferStatus)
 
 	prompt := fmt.Sprintf("<|im_start|>system\nYou are a BitTorrent Tuning unit for Raspberry Pi 4.\nContext: %s\nIMPORTANT: If Speed is < 1.2MB/s and CPU is Low, set connections_limit=60, peer_timeout=15.\nObjective: 100%% Buffer, Fast Performance, Stable CPU.\nRespond ONLY compact JSON: {\"connections_limit\": 25, \"peer_timeout\": 30}<|im_end|>\n<|im_start|>user\nAnalyze trend and context. DECIDE.<|im_end|>\n<|im_start|>assistant\n", 
@@ -129,8 +129,8 @@ func runTuningCycle(aiURL string) {
 		lastConns = tweak.ConnectionsLimit
 		lastTimeout = tweak.PeerTimeout
 
-		log.Printf("[AI-Pilot] Optimizer applying change: Conns(%d->%d) Timeout(%ds->%ds) [Metrics: %s]", 
-			oldConns, lastConns, oldTimeout, lastTimeout, currentSnap)
+		log.Printf("[AI-Pilot] Optimizer applying change: Conns(%d->%d) Timeout(%ds->%ds) [Metrics: %s] [Ctx: %s]", 
+			oldConns, lastConns, oldTimeout, lastTimeout, currentSnap, contextStr)
 	}
 }
 
