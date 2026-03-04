@@ -107,6 +107,7 @@ On a standard virtual filesystem, these IDs are random and change every time the
 
 - [The Setup: GoStream + Plex + Infuse on Apple TV](#the-setup-gostream--plex--infuse-on-apple-tv)
 - [How the Magic Works](#how-the-magic-works)
+- [AI GoStream Pilot - Experimental](https://github.com/MrRobotoGit/gostream/blob/main/ai/docs/ai-pilot.md)
 - [Architecture](#architecture)
 - [Core Engineering](#core-engineering)
 - [Performance](#performance)
