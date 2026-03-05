@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">🎬 GoStream</h1>
   <p align="center">
-    <strong>The most advanced torrent engine and FUSE virtual filesystem for live streaming to your private Plex library. Forget Real-Debrid.</strong>
+    <strong>The most advanced torrent engine and FUSE virtual filesystem for live torrent streaming to your private Plex library. Forget Real-Debrid.</strong>
   </p>
 </p>
 
