@@ -36,7 +36,32 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 ---
 
-## The Setup: GoStream + Plex + Infuse on Apple TV
+## Table of Contents
+
+- [The Setup: GoStream + Plex/Infuse on Apple TV](#the-setup-gostream--plex--infuse-on-apple-tv)
+- [How the Magic Works](#how-the-magic-works)
+- [AI GoStream Pilot - Experimental](https://github.com/MrRobotoGit/gostream/blob/main/ai/docs/ai-pilot.md)
+- [Architecture](#architecture)
+- [Core Engineering](#core-engineering)
+- [Performance](#performance)
+- [Requirements](#requirements)
+- [Quick Install](#quick-install)
+- [How-To Guide](#how-to-guide)
+- [Control Panel](#gostream-control-panel)
+- [Health Monitor](#health-monitor-dashboard)
+- [Configuration Reference](#configuration-reference)
+- [Sync Scripts](#sync-scripts)
+- [Plex & Samba Setup](#plex-and-samba-setup)
+- [Build from Source](#build-from-source)
+- [Docker](#docker)
+- [API Reference](#api-quick-reference)
+- [Troubleshooting](#troubleshooting)
+- [Donate](#support)
+- [License](#license)
+
+---
+
+## The Setup: GoStream + Plex/Infuse on Apple TV
 
 > Not a developer? This section explains what you actually get and why it works so well.
 
@@ -96,31 +121,6 @@ On a standard virtual filesystem, these IDs are random and change every time the
 
 ![Health Monitor — Status grid and sync controls](docs/screenshots/health_monitor_1.png)
 
-
----
-
-## Table of Contents
-
-- [The Setup: GoStream + Plex + Infuse on Apple TV](#the-setup-gostream--plex--infuse-on-apple-tv)
-- [How the Magic Works](#how-the-magic-works)
-- [AI GoStream Pilot - Experimental](https://github.com/MrRobotoGit/gostream/blob/main/ai/docs/ai-pilot.md)
-- [Architecture](#architecture)
-- [Core Engineering](#core-engineering)
-- [Performance](#performance)
-- [Requirements](#requirements)
-- [Quick Install](#quick-install)
-- [How-To Guide](#how-to-guide)
-- [Control Panel](#gostream-control-panel)
-- [Health Monitor](#health-monitor-dashboard)
-- [Configuration Reference](#configuration-reference)
-- [Sync Scripts](#sync-scripts)
-- [Plex & Samba Setup](#plex-and-samba-setup)
-- [Build from Source](#build-from-source)
-- [Docker](#docker)
-- [API Reference](#api-quick-reference)
-- [Troubleshooting](#troubleshooting)
-- [Donate](#support)
-- [License](#license)
 
 ---
 
