@@ -473,9 +473,9 @@
     <div class="container">
         <header>
             <h1>GoStream <span>Control</span></h1>
-            <div class="header-controls"> <a href="https://github.com/sponsors/MrRobotoGit" target="_blank"
+            <div class="header-controls"><a href="https://github.com/sponsors/MrRobotoGit" target="_blank"
                     rel="noopener" title="Star on GitHub"><img
-                        src="https://img.shields.io/static/v1?label=DONATE&message=%E2%9D%A4&logo=GitHub&"
+                        src="https://img.shields.io/static/v1?label=DONATE&message=%E2%9D%A4&logo=GitHub"
                         style="vertical-align:middle;"></a>
                 <a href="https://github.com/MrRobotoGit/gostream" target="_blank" rel="noopener"
                     title="Star on GitHub"><img
@@ -662,6 +662,28 @@
                                 <input type="text" name="blocklist_url"
                                     placeholder="https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz">
                                 <div class="hint">Block malicious/anti-P2P peers automatically</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <div class="form-section-title">External Services</div>
+                        <div class="form-grid">
+                            <div class="form-group" style="grid-column: 1 / -1;">
+                                <label>TMDB API key</label>
+                                <input type="text" name="tmdb_api_key">
+                            </div>
+                            <div class="form-group" style="grid-column: 1 / -1;">
+                                <label>Plex URL</label>
+                                <input type="text" name="plex_url" data-nested="plex.url">
+                            </div>
+                            <div class="form-group">
+                                <label>Plex Token</label>
+                                <input type="text" name="plex_token" data-nested="plex.token">
+                            </div>
+                            <div class="form-group">
+                                <label>Plex Library ID</label>
+                                <input type="number" name="plex_library_id" data-nested="plex.library_id">
                             </div>
                         </div>
                     </div>
@@ -1009,7 +1031,8 @@
             'cache_cleanup_interval_min', 'http_client_timeout_seconds', 'max_retry_attempts',
             'retry_delay_ms', 'gostorm_url', 'rescue_grace_period_seconds',
             'rescue_cooldown_hours', 'metrics_port', 'disk_warmup_quota_gb',
-            'warmup_head_size_mb', 'log_level', 'proxy_listen_port', 'blocklist_url'
+            'warmup_head_size_mb', 'log_level', 'proxy_listen_port', 'blocklist_url',
+            'tmdb_api_key'
         ];
 
         async function loadEngine() {
@@ -1020,7 +1043,7 @@
                 ENGINE_ROOT_KEYS.forEach(k => {
                     const input = document.querySelector(`[name="${k}"]`);
                     if (input) {
-                        input.value = originalEngine[k];
+                        input.value = originalEngine[k] || "";
                         const label = document.querySelector(`[data-for="${k}"]`);
                         if (label) {
                             const suffix = k.includes('_mb') ? ' MB' : '%';
@@ -1030,13 +1053,19 @@
                 });
                 const n = originalEngine.NatPMP || originalEngine.natpmp;
                 if (n) {
-                    form.querySelector('[data-nested="natpmp.gateway"]').value = n.Gateway || n.gateway || "";
-                    form.querySelector('[data-nested="natpmp.vpn_interface"]').value = n.VPNInterface || n.vpn_interface || "";
-                    form.querySelector('[data-nested="natpmp.refresh"]').value = n.Refresh || n.refresh || 0;
-                    form.querySelector('[data-nested="natpmp.lifetime"]').value = n.Lifetime || n.lifetime || 0;
-                    form.querySelector('[data-nested="natpmp.local_port"]').value = n.LocalPort || n.local_port || 0;
-                    form.querySelector('[data-nested="natpmp.enabled"]').checked = (n.Enabled !== undefined) ? n.Enabled : n.enabled;
+                    form.querySelector('[data-nested="natpmp.gateway"]').value = n.gateway || n.Gateway || "";
+                    form.querySelector('[data-nested="natpmp.vpn_interface"]').value = n.vpn_interface || n.VPNInterface || "";
+                    form.querySelector('[data-nested="natpmp.refresh"]').value = n.refresh || n.Refresh || 0;
+                    form.querySelector('[data-nested="natpmp.lifetime"]').value = n.lifetime || n.Lifetime || 0;
+                    form.querySelector('[data-nested="natpmp.local_port"]').value = n.local_port || n.LocalPort || 0;
+                    form.querySelector('[data-nested="natpmp.enabled"]').checked = (n.enabled !== undefined) ? n.enabled : n.Enabled;
                     updateNatPmpState();
+                }
+                const p = originalEngine.plex || originalEngine.Plex;
+                if (p) {
+                    form.querySelector('[data-nested="plex.url"]').value = p.url || p.URL || "";
+                    form.querySelector('[data-nested="plex.token"]').value = p.token || p.Token || "";
+                    form.querySelector('[data-nested="plex.library_id"]').value = p.library_id || p.LibraryID || 0;
                 }
                 markCouplingLoaded();
             } catch (e) { console.error("Engine load error", e); }
@@ -1055,7 +1084,7 @@
                 if (v === null || v === "") return;
 
                 if (k === 'log_level' || k === 'gostorm_url' || k === 'blocklist_url' ||
-                    k === 'physical_source_path' || k === 'fuse_mount_path') {
+                    k === 'physical_source_path' || k === 'fuse_mount_path' || k === 'tmdb_api_key') {
                     data[k] = v;
                 } else if (k.includes('timeout_seconds')) {
                     const parsed = parseFloat(v);
@@ -1083,6 +1112,14 @@
                 lifetime: getNatVal('natpmp_lifetime', 'lifetime', true),
                 local_port: getNatVal('natpmp_port', 'local_port', true),
                 enabled: formData.has('natpmp_enabled')
+            };
+
+            const plexKey = originalEngine.plex ? 'plex' : 'Plex';
+            const oldPlex = originalEngine[plexKey] || {};
+            data[plexKey] = {
+                url: formData.get('plex_url') || oldPlex.url || oldPlex.URL || "",
+                token: formData.get('plex_token') || oldPlex.token || oldPlex.Token || "",
+                library_id: parseInt(formData.get('plex_library_id')) || oldPlex.library_id || oldPlex.LibraryID || 0
             };
 
             const res = await fetch('/api/config', {

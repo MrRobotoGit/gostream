@@ -93,6 +93,14 @@ type Config struct {
 
 	// --- NAT-PMP (V228) ---
 	NatPMP NatPMPConfig `json:"natpmp"`
+
+	// --- External Services (V1.4.6) ---
+	Plex struct {
+		URL       string `json:"url"`
+		Token     string `json:"token"`
+		LibraryID int    `json:"library_id"`
+	} `json:"plex"`
+	TMDBAPIKey string `json:"tmdb_api_key"`
 }
 
 // LoadConfig loads configuration from environment variables with defaults
