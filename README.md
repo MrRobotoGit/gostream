@@ -120,12 +120,6 @@ On a standard virtual filesystem, these IDs are random and change every time the
 
 ---
 
-## Health Monitor
-
-<p align="center"><img src="docs/screenshots/health_monitor_1.png" alt="Health Monitor — Status grid and sync controls" width="500"></p>
-
----
-
 ## How the Magic Works
 
 Plex reads `/mnt/gostream-mkv-virtual/movies/Interstellar.mkv`. From Plex's perspective, it's a normal 55 GB file on a local disk. In reality, the file does not exist. The FUSE kernel module intercepts the read, calls into GoStream, and GoStream serves the exact bytes from a three-layer cache — backed by a live BitTorrent swarm.
@@ -605,6 +599,8 @@ Settings are pushed **live via API** — no restart needed. **Apply All Core Set
 ---
 
 ## Health Monitor Dashboard
+
+<p align="center"><img src="docs/screenshots/health_monitor_1.png" alt="Health Monitor — Status grid and sync controls" width="500"></p>
 
 Standalone Python service (`health-monitor.py`) at port **`:8095`**. Real-time operational view of the entire stack.
 
