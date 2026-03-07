@@ -30,7 +30,7 @@ class ProwlarrClient:
             "indexerIds": "-2"  # All indexers
         }
         try:
-            response = requests.get(self.SEARCH_ENDPOINT, params=params, timeout=45)
+            response = requests.get(self.SEARCH_ENDPOINT, params=params, timeout=2)
             if response.status_code == 200:
                 return response.json()
             else:
