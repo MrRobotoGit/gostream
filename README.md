@@ -51,6 +51,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - [Health Monitor](#health-monitor-dashboard)
 - [Configuration Reference](#configuration-reference)
 - [Sync Scripts](#sync-scripts)
+- [Prowlarr Integration](#prowlarr-integration-resilience)
 - [Plex & Samba Setup](#plex-and-samba-setup)
 - [Build from Source](#build-from-source)
 - [Docker](#docker)
