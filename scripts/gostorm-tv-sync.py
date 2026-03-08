@@ -620,7 +620,7 @@ class GoStormTV:
 
         return {
             'title': title,
-            'hash': info_hash,
+            'hash': info_hash.lower(),
             'is_fullpack': is_fullpack,
             'is_partial_pack': is_partial_pack,
             'quality_score': quality_score,
