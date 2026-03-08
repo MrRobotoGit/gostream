@@ -358,6 +358,10 @@ sudo systemctl start gostream health-monitor
 
 ## How-To Guide
 
+> [!CAUTION]
+> **Attention:** After the first run of the Movie and TV library population scripts, hundreds of `.mkv` files will be created. Plex will then begin scanning these files to populate its UI. During this initial scan, playback will be extremely slow or may time out. This is because Plex opens and closes files hundreds of times during analysis, which congests the BitTorrent engine. Please wait for Plex to complete its scan before starting any streams. Enjoy!
+
+
 <details>
 <summary><b>Step 1 — Configure the Plex Webhook</b></summary>
 
@@ -388,9 +392,6 @@ smb://192.168.1.2/gostream-mkv-virtual/movies
 Or, if using Synology, point Plex to the CIFS mount: `/volume1/GoStream/movies`.
 
 Run a library scan after adding the library. Plex reads the first megabyte of every `.mkv` file during the scan — this automatically populates the SSD warmup head cache for every title. Subsequent plays will start in under 0.5 seconds.
-
-> [!CAUTION]
-> **Attention:** After the first run of the Movie and TV library population scripts, hundreds of `.mkv` files will be created. Plex will then begin scanning these files to populate its UI. During this initial scan, playback will be extremely slow or may time out. This is because Plex opens and closes files hundreds of times during analysis, which congests the BitTorrent engine. Please wait for Plex to complete its scan before starting any streams. Enjoy!
 
 </details>
 
