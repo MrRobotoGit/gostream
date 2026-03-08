@@ -2882,8 +2882,13 @@ func main() {
 
 	// V150: Centralize paths (Phase 3)
 	if dbPath != "" {
-		// Use the directory of the passed db/config file as root
-		globalConfig.RootPath = filepath.Dir(dbPath)
+		// V1.4.6-Fix: If dbPath is a directory, use it directly as RootPath.
+		// If it's a file (e.g. config.json), use its parent directory.
+		if fi, err := os.Stat(dbPath); err == nil && fi.IsDir() {
+			globalConfig.RootPath = dbPath
+		} else {
+			globalConfig.RootPath = filepath.Dir(dbPath)
+		}
 	} else {
 		// Default to /home/pi if no flag provided (for backward compat)
 		globalConfig.RootPath = "/home/pi"

@@ -41,7 +41,7 @@ def _load_gostream_config() -> dict:
     # logs stay at parent level (shared with gostream binary and health-monitor)
     config_dir = os.path.dirname(os.path.abspath(config_path))
     cfg.setdefault('_state_dir', os.path.join(config_dir, 'STATE'))
-    cfg.setdefault('_log_dir', os.path.join(os.path.dirname(config_dir), 'logs'))
+    cfg.setdefault('_log_dir', os.path.join(config_dir, 'logs'))
     return cfg
 
 

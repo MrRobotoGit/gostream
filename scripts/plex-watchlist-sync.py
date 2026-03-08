@@ -37,9 +37,8 @@ def _load_gostream_config() -> dict:
     except Exception:
         cfg = {}
     config_dir = os.path.dirname(os.path.abspath(config_path))
-    base_dir = os.path.dirname(config_dir)
-    cfg.setdefault('_state_dir', os.path.join(base_dir, 'STATE'))
-    cfg.setdefault('_log_dir', os.path.join(base_dir, 'logs'))
+    cfg.setdefault('_state_dir', os.path.join(config_dir, 'STATE'))
+    cfg.setdefault('_log_dir', os.path.join(config_dir, 'logs'))
     return cfg
 
 
