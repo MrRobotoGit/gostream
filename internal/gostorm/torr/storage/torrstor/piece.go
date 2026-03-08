@@ -106,7 +106,7 @@ func (p *Piece) MarkNotComplete() error {
 				last := lastCorruptionUnix.Load()
 				elapsed := time.Since(time.Unix(last, 0))
 
-				if elapsed > 60*time.Second {
+				if elapsed > 30*time.Second {
 					if shieldActive.Swap(false) {
 						log.TLogln("[AdaptiveShield] Clean streak detected (60s) - Restoring FAST mode (Shield: OFF)")
 					}
