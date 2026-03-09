@@ -466,6 +466,136 @@
             background: #14532d;
             color: #86efac;
         }
+
+        /* ── Live Monitor ── */
+        .monitor-full { grid-column: 1 / -1; }
+
+        .mon-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .mon-box {
+            background: var(--section-bg);
+            border: 1px solid var(--section-border);
+            border-radius: 8px;
+            padding: 12px 14px;
+        }
+
+        .mon-box-title {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            color: var(--muted);
+            margin-bottom: 8px;
+        }
+
+        .mon-stat {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            padding: 3px 0;
+            border-bottom: 1px solid var(--section-border);
+        }
+        .mon-stat:last-child { border-bottom: none; }
+        .mon-stat-label { color: var(--muted); }
+        .mon-stat-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+        .mon-bar-wrap {
+            height: 5px;
+            background: var(--border);
+            border-radius: 3px;
+            margin-top: 3px;
+            overflow: hidden;
+        }
+        .mon-bar { height: 100%; border-radius: 3px; transition: width .5s ease, background .5s; }
+
+        .mon-torrent {
+            background: var(--section-bg);
+            border: 1px solid var(--section-border);
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-top: 10px;
+        }
+
+        .mon-torrent-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .mon-torrent-title {
+            flex: 1;
+            font-size: 13px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .mon-state {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 8px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .mon-state-working { background: #dcfce7; color: #166534; }
+        .mon-state-stalled { background: #fee2e2; color: #991b1b; }
+        .mon-state-preload { background: #dbeafe; color: #1e40af; }
+        .mon-state-idle    { background: var(--border); color: var(--muted); }
+        [data-theme="dark"] .mon-state-working { background: #14532d; color: #86efac; }
+        [data-theme="dark"] .mon-state-stalled { background: #450a0a; color: #fca5a5; }
+        [data-theme="dark"] .mon-state-preload { background: #1e3a5f; color: #93c5fd; }
+
+        .mon-torrent-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+            gap: 8px;
+            font-size: 11px;
+        }
+
+        .mon-kv { display: flex; flex-direction: column; gap: 2px; }
+        .mon-kv-label { color: var(--muted); font-size: 10px; }
+        .mon-kv-val   { font-weight: 600; font-variant-numeric: tabular-nums; }
+        .mon-kv-val.good   { color: #10b981; }
+        .mon-kv-val.warn   { color: #d97706; }
+        .mon-kv-val.danger { color: #ef4444; }
+
+        .mon-preload-wrap { margin-top: 10px; }
+        .mon-preload-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: var(--muted);
+            margin-bottom: 3px;
+        }
+
+        .mon-empty { color: var(--muted); font-size: 12px; padding: 14px 0; text-align: center; }
+
+        .mon-footer {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 12px;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .mon-dot {
+            display: inline-block;
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: #10b981;
+            margin-right: 5px;
+            animation: mondot 2s infinite;
+        }
+        .mon-dot.error { background: #ef4444; animation: none; }
+        @keyframes mondot { 0%,100%{opacity:1} 50%{opacity:.25} }
     </style>
 </head>
 
@@ -491,6 +621,92 @@
         </header>
 
         <div class="grid">
+            <!-- ── Live Monitor ── -->
+            <div class="card monitor-full">
+                <h2>📡 Live Monitor <span class="live-badge running" id="mon-badge">Live</span></h2>
+
+                <div class="mon-row">
+                    <!-- Download -->
+                    <div class="mon-box">
+                        <div class="mon-box-title">Active Stream</div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Download</span>
+                            <span class="mon-stat-val" id="mon-dl">—</span>
+                        </div>
+                        <div class="mon-bar-wrap"><div class="mon-bar" id="mon-dl-bar" style="width:0%"></div></div>
+                        <div class="mon-stat" style="margin-top:6px">
+                            <span class="mon-stat-label">Upload</span>
+                            <span class="mon-stat-val" id="mon-ul">—</span>
+                        </div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Loaded</span>
+                            <span class="mon-stat-val" id="mon-loaded">—</span>
+                        </div>
+                        <div class="mon-bar-wrap"><div class="mon-bar" id="mon-loaded-bar" style="width:0%;background:#3b82f6"></div></div>
+                    </div>
+
+                    <!-- Peers -->
+                    <div class="mon-box">
+                        <div class="mon-box-title">Peers</div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Seeders (connected)</span>
+                            <span class="mon-stat-val" id="mon-seeders">—</span>
+                        </div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Active peers</span>
+                            <span class="mon-stat-val" id="mon-active">—</span>
+                        </div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Half-open</span>
+                            <span class="mon-stat-val" id="mon-halfopen">—</span>
+                        </div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Pending</span>
+                            <span class="mon-stat-val" id="mon-pending">—</span>
+                        </div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Total known</span>
+                            <span class="mon-stat-val" id="mon-total">—</span>
+                        </div>
+                    </div>
+
+                    <!-- FUSE Buffer -->
+                    <div class="mon-box">
+                        <div class="mon-box-title">FUSE Read-Ahead Buffer</div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Active (feeding player)</span>
+                            <span class="mon-stat-val" id="mon-ra-active">—</span>
+                        </div>
+                        <div class="mon-bar-wrap"><div class="mon-bar" id="mon-ra-active-bar" style="width:0%"></div></div>
+                        <div class="mon-stat" style="margin-top:6px">
+                            <span class="mon-stat-label">Budget used</span>
+                            <span class="mon-stat-val" id="mon-ra-pct">—</span>
+                        </div>
+                        <div class="mon-bar-wrap"><div class="mon-bar" id="mon-ra-pct-bar" style="width:0%;background:#3b82f6"></div></div>
+                        <div class="mon-stat" style="margin-top:6px">
+                            <span class="mon-stat-label">Entries</span>
+                            <span class="mon-stat-val" id="mon-ra-entries">—</span>
+                        </div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Cache hit rate</span>
+                            <span class="mon-stat-val" id="mon-hitrate">—</span>
+                        </div>
+                        <div class="mon-stat">
+                            <span class="mon-stat-label">Avg HTTP latency</span>
+                            <span class="mon-stat-val" id="mon-lat">—</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Per-torrent detail -->
+                <div id="mon-torrents"></div>
+
+                <div class="mon-footer">
+                    <span><span class="mon-dot" id="mon-dot"></span><span id="mon-status">Connecting…</span></span>
+                    <span id="mon-updated">—</span>
+                </div>
+            </div>
+
             <!-- ENGINE SETTINGS (GoStream config.json) -->
             <div class="card">
                 <h2>⚙️ GoStream FUSE <span class="live-badge running">Running</span></h2>
@@ -1203,6 +1419,202 @@
 
         loadEngine();
         loadCore();
+
+        // ── Live Monitor ──
+        function monFmtBytes(b) {
+            if (!b) return '0 B';
+            const u = ['B','KB','MB','GB'];
+            let i = 0;
+            while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+            return b.toFixed(i === 0 ? 0 : 1) + ' ' + u[i];
+        }
+        function monFmtSpeed(bps) { return monFmtBytes(bps) + '/s'; }
+        function monClamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v || 0)); }
+
+        function monSetBar(id, pct, color) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.style.width = monClamp(pct, 0, 100) + '%';
+            el.style.background = color;
+        }
+        function monSet(id, txt, cls) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = txt;
+            if (cls !== undefined) el.className = 'mon-kv-val' + (cls ? ' ' + cls : '');
+        }
+
+        function monSpeedColor(bps) {
+            // For 4K content needs ~2MB/s minimum
+            if (bps >= 2e6) return '#10b981';
+            if (bps >= 500000) return '#f59e0b';
+            return '#ef4444';
+        }
+        function monPeerClass(n) {
+            if (n >= 5) return 'good';
+            if (n >= 1) return 'warn';
+            return 'danger';
+        }
+
+        function monRenderTorrents(list) {
+            const el = document.getElementById('mon-torrents');
+            if (!list || !list.length) {
+                el.innerHTML = '<div class="mon-empty">No active streams — stats update when Plex starts playing</div>';
+                // Zero out the summary boxes
+                ['mon-dl','mon-ul','mon-loaded','mon-seeders','mon-active',
+                 'mon-halfopen','mon-pending','mon-total'].forEach(id => {
+                    const e = document.getElementById(id);
+                    if (e) e.textContent = '—';
+                });
+                monSetBar('mon-dl-bar', 0, '#10b981');
+                monSetBar('mon-loaded-bar', 0, '#3b82f6');
+                return;
+            }
+
+            const t = list[0]; // show first active torrent in summary boxes
+            const dl = t.download_speed || 0;
+            const ul = t.upload_speed || 0;
+            const loaded = t.loaded_size || 0;
+            const total = t.torrent_size || 1;
+            const loadedPct = loaded / total * 100;
+            const dlColor = monSpeedColor(dl);
+
+            document.getElementById('mon-dl').textContent = monFmtSpeed(dl);
+            document.getElementById('mon-dl').style.color = dlColor;
+            document.getElementById('mon-ul').textContent = monFmtSpeed(ul);
+            document.getElementById('mon-loaded').textContent =
+                monFmtBytes(loaded) + ' / ' + monFmtBytes(total) + ' (' + loadedPct.toFixed(1) + '%)';
+            monSetBar('mon-dl-bar', monClamp(dl / 10e6 * 100, 0, 100), dlColor);
+            monSetBar('mon-loaded-bar', loadedPct, '#3b82f6');
+
+            const seeders = t.connected_seeders || 0;
+            const active  = t.active_peers || 0;
+            const halfopen = t.half_open_peers || 0;
+            const pending = t.pending_peers || 0;
+            const totalP  = t.total_peers || 0;
+
+            function colorPeer(n, el) {
+                el = document.getElementById(el);
+                if (!el) return;
+                el.textContent = n;
+                el.style.color = n === 0 ? '#ef4444' : n < 3 ? '#d97706' : '#10b981';
+            }
+            colorPeer(seeders, 'mon-seeders');
+            colorPeer(active,  'mon-active');
+            document.getElementById('mon-halfopen').textContent = halfopen;
+            document.getElementById('mon-pending').textContent  = pending;
+            document.getElementById('mon-total').textContent    = totalP;
+
+            // Per-torrent detail cards
+            el.innerHTML = list.map(t => {
+                const dl  = t.download_speed || 0;
+                const seeders = t.connected_seeders || 0;
+                const active  = t.active_peers || 0;
+                const wasted  = t.chunks_read_wasted || 0;
+                const useful  = t.chunks_read_useful || 0;
+                const wasteRate = (useful + wasted) > 0 ? Math.round(wasted / (useful + wasted) * 100) : 0;
+                const preloaded = t.preloaded_bytes || 0;
+                const preloadSz = t.preload_size || 0;
+                const preloadPct = preloadSz > 0 ? Math.round(preloaded / preloadSz * 100) : 0;
+                const statClass = t.stat === 3 && dl < 50000 ? 'mon-state-stalled'
+                                : t.stat === 3 ? 'mon-state-working'
+                                : t.stat === 2 ? 'mon-state-preload'
+                                : 'mon-state-idle';
+                const dlC = monSpeedColor(dl);
+                const preloadBar = preloadSz > 0 ? `
+                    <div class="mon-preload-wrap">
+                        <div class="mon-preload-label">
+                            <span>Preload</span>
+                            <span>${monFmtBytes(preloaded)} / ${monFmtBytes(preloadSz)} (${preloadPct}%)</span>
+                        </div>
+                        <div class="mon-bar-wrap">
+                            <div class="mon-bar" style="width:${preloadPct}%;background:#3b82f6"></div>
+                        </div>
+                    </div>` : '';
+                return `<div class="mon-torrent">
+                    <div class="mon-torrent-header">
+                        <div class="mon-torrent-title" title="${t.name || t.hash}">${t.name || t.title || t.hash || 'Unknown'}</div>
+                        <span class="mon-state ${statClass}">${t.stat_string || 'Unknown'}</span>
+                    </div>
+                    <div class="mon-torrent-grid">
+                        <div class="mon-kv"><span class="mon-kv-label">Download</span>
+                            <span class="mon-kv-val" style="color:${dlC}">${monFmtSpeed(dl)}</span></div>
+                        <div class="mon-kv"><span class="mon-kv-label">Upload</span>
+                            <span class="mon-kv-val">${monFmtSpeed(t.upload_speed || 0)}</span></div>
+                        <div class="mon-kv"><span class="mon-kv-label">Seeders</span>
+                            <span class="mon-kv-val ${monPeerClass(seeders)}">${seeders}</span></div>
+                        <div class="mon-kv"><span class="mon-kv-label">Active peers</span>
+                            <span class="mon-kv-val ${monPeerClass(active)}">${active}</span></div>
+                        <div class="mon-kv"><span class="mon-kv-label">Half-open</span>
+                            <span class="mon-kv-val">${t.half_open_peers || 0}</span></div>
+                        <div class="mon-kv"><span class="mon-kv-label">Total peers</span>
+                            <span class="mon-kv-val">${t.total_peers || 0}</span></div>
+                        <div class="mon-kv"><span class="mon-kv-label">Wasted chunks</span>
+                            <span class="mon-kv-val ${wasteRate > 20 ? 'warn' : ''}">${wasteRate}%</span></div>
+                        <div class="mon-kv"><span class="mon-kv-label">Bad pieces</span>
+                            <span class="mon-kv-val ${(t.pieces_dirtied_bad||0) > 0 ? 'warn' : ''}">${t.pieces_dirtied_bad || 0}</span></div>
+                    </div>
+                    ${preloadBar}
+                </div>`;
+            }).join('');
+        }
+
+        async function monPoll() {
+            const gostorm = 'http://' + window.location.hostname + ':8090';
+            const dot  = document.getElementById('mon-dot');
+            const status = document.getElementById('mon-status');
+            try {
+                const [mRes, pRes, tRes] = await Promise.all([
+                    fetch('/metrics',           { signal: AbortSignal.timeout(3000) }),
+                    fetch('/metrics/profiling', { signal: AbortSignal.timeout(3000) }),
+                    fetch(gostorm + '/torrents', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'active' }),
+                        signal: AbortSignal.timeout(3000)
+                    })
+                ]);
+
+                if (mRes.ok) {
+                    const m = await mRes.json();
+                    const budget = m.read_ahead_budget || 1;
+                    document.getElementById('mon-ra-active').textContent =
+                        monFmtBytes(m.read_ahead_active_bytes) + ' (' + (m.read_ahead_active_percent||0).toFixed(1) + '%)';
+                    document.getElementById('mon-ra-pct').textContent =
+                        (m.read_ahead_percent||0).toFixed(1) + '% of ' + monFmtBytes(budget);
+                    document.getElementById('mon-ra-entries').textContent = m.read_ahead_entries;
+                    const activeP = m.read_ahead_active_percent || 0;
+                    monSetBar('mon-ra-active-bar', activeP,
+                        activeP >= 40 ? '#10b981' : activeP >= 10 ? '#f59e0b' : '#ef4444');
+                    monSetBar('mon-ra-pct-bar', m.read_ahead_percent || 0, '#3b82f6');
+                }
+
+                if (pRes.ok) {
+                    const p = await pRes.json();
+                    const hit = p.cache_hit_rate_pct || 0;
+                    document.getElementById('mon-hitrate').textContent = hit.toFixed(1) + '%';
+                    document.getElementById('mon-hitrate').style.color =
+                        hit >= 80 ? '#10b981' : hit >= 50 ? '#d97706' : '#ef4444';
+                    document.getElementById('mon-lat').textContent =
+                        p.avg_http_latency_ms.toFixed(2) + ' ms';
+                }
+
+                if (tRes.ok) {
+                    monRenderTorrents(await tRes.json());
+                }
+
+                dot.className = 'mon-dot';
+                status.textContent = 'Live';
+                document.getElementById('mon-updated').textContent =
+                    'Updated ' + new Date().toLocaleTimeString();
+            } catch (e) {
+                dot.className = 'mon-dot error';
+                status.textContent = 'Poll error: ' + e.message;
+            }
+        }
+
+        monPoll();
+        setInterval(monPoll, 2000);
     </script>
 </body>
 
