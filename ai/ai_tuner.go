@@ -23,6 +23,8 @@ var aiDisabled atomic.Bool
 
 var lastConns = 0
 var lastTimeout = 0
+var defaultConns = 0
+var defaultTimeout = 0
 var metricsHistory []string
 var lastKnownTotalSpeed float64
 var CurrentLimit int32
@@ -95,6 +97,8 @@ func StartAITuner(ctx context.Context, aiURL string) {
 	if settings.BTsets != nil {
 		lastConns = settings.BTsets.ConnectionsLimit
 		lastTimeout = settings.BTsets.TorrentDisconnectTimeout
+		defaultConns = lastConns
+		defaultTimeout = lastTimeout
 	}
 	log.Printf("[AI-Pilot] Neural optimizer starting... (Stats: 5s, AI: 300s) baseline conns=%d timeout=%d", lastConns, lastTimeout)
 	ticker := time.NewTicker(5 * time.Second)
@@ -131,17 +135,17 @@ func runTuningCycle(aiURL string) {
 
 	// Multi-stream protection logic
 	if count > 1 {
-		if lastConns != 25 || lastTimeout != 15 {
-			log.Printf("[AI-Pilot] Multiple streams detected (%d). Resetting to safety defaults (25:15).", count)
+		if lastConns != defaultConns || lastTimeout != defaultTimeout {
+			log.Printf("[AI-Pilot] Multiple streams detected (%d). Resetting to safety defaults (%d:%d).", count, defaultConns, defaultTimeout)
 			for _, t := range activeTorrents {
 				if t.Torrent != nil {
-					t.Torrent.SetMaxEstablishedConns(25)
-					t.AddExpiredTime(15 * time.Second)
+					t.Torrent.SetMaxEstablishedConns(defaultConns)
+					t.AddExpiredTime(time.Duration(defaultTimeout) * time.Second)
 				}
 			}
-			atomic.StoreInt32(&CurrentLimit, 25)
-			lastConns = 25
-			lastTimeout = 15
+			atomic.StoreInt32(&CurrentLimit, int32(defaultConns))
+			lastConns = defaultConns
+			lastTimeout = defaultTimeout
 			metricsHistory = nil
 			torrentSpeedAvg = nil
 			cpuUsageAvg = nil
@@ -234,7 +238,7 @@ func runTuningCycle(aiURL string) {
 		int(avgCPU), int(peakCPUCycle), buffer, activeStats.ActivePeers, currSpeedMBs, speedTrendStr))
 
 	metricsHistory = append(metricsHistory, currentSnap)
-	if len(metricsHistory) > 2 {
+	if len(metricsHistory) > 4 {
 		metricsHistory = metricsHistory[1:]
 	}
 	historyStr := strings.Join(metricsHistory, " -> ")
