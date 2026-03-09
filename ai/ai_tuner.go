@@ -48,7 +48,7 @@ var aiClient = &http.Client{
 
 type AITweak struct {
 	ConnectionsLimit float64 `json:"connections_limit"`
-	PeerTimeout      float64 `json:"peer_timeout"`
+	PeerTimeout      float64 `json:"peer_timeout_seconds"`
 }
 
 func (t *AITweak) Sanitize() {
@@ -256,9 +256,9 @@ func runTuningCycle(aiURL string) {
 	// Re-zero peak for next 5m cycle
 	peakCPUCycle = 0
 
-	// Llama-3.2 instruct template — no current-value anchors to avoid echo effect
+	// Qwen3 ChatML template
 	prompt := fmt.Sprintf(
-		"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nTune BitTorrent for stable 4K streaming. Output JSON: {\"connections_limit\":N,\"peer_timeout\":M}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nspeed=%.0fMB/s cpu=%d%% buf=%d%% peers=%d trend=%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+		"<|im_start|>system\nTune BitTorrent for stable 4K streaming. Output JSON: {\"connections_limit\":N,\"peer_timeout_seconds\":M}<|im_end|>\n<|im_start|>user\nspeed=%.0fMB/s cpu=%d%% buf=%d%% peers=%d trend=%s<|im_end|>\n<|im_start|>assistant\n",
 		currSpeedMBs, int(currentCPU), buffer, activeStats.ActivePeers, speedTrendStr,
 	)
 	_ = contextStr
@@ -312,8 +312,8 @@ func runTuningCycle(aiURL string) {
 func fetchAIJSON[T any](url string, prompt string) (*T, error) {
 	start := time.Now()
 
-	grammar := `root ::= "{\"connections_limit\":" number ",\"peer_timeout\":" number "}"
-number ::= [0-9]+ ( "." [0-9]+ )?`
+	grammar := `root ::= "{\"connections_limit\":" number ",\"peer_timeout_seconds\":" number "}"
+number ::= [1-9] [0-9]?`
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"prompt":       prompt,
