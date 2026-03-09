@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -3189,6 +3190,18 @@ func main() {
 			logger.Printf("[Config] Updated via Dashboard API")
 			w.WriteHeader(200)
 		}
+	})
+
+	http.HandleFunc("/api/sysinfo", func(w http.ResponseWriter, r *http.Request) {
+		var info runtime.MemStats
+		runtime.ReadMemStats(&info)
+		si := &syscall.Sysinfo_t{}
+		totalRAM := uint64(0)
+		if err := syscall.Sysinfo(si); err == nil {
+			totalRAM = si.Totalram * uint64(si.Unit)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"total_ram_bytes":%d,"gostream_alloc_bytes":%d}`, totalRAM, info.Alloc)
 	})
 
 	http.HandleFunc("/api/restart", func(w http.ResponseWriter, r *http.Request) {

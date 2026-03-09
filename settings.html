@@ -466,6 +466,34 @@
             background: #14532d;
             color: #86efac;
         }
+
+        /* ── Logarithmic slider ── */
+        .log-slider-wrap { position: relative; padding-bottom: 22px; }
+        .log-slider-wrap input[type="range"] { width: 100%; }
+        .log-slider-ticks {
+            display: flex;
+            justify-content: space-between;
+            position: absolute;
+            bottom: 0;
+            left: 0; right: 0;
+            pointer-events: none;
+        }
+        .log-slider-ticks span {
+            font-size: 9px;
+            color: var(--muted);
+            text-align: center;
+            width: 0;
+            white-space: nowrap;
+            transform: translateX(-50%);
+        }
+        .log-slider-ticks span:first-child { transform: none; }
+        .log-slider-ticks span:last-child  { transform: translateX(-100%); }
+        .log-slider-val {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 4px;
+        }
     </style>
 </head>
 
@@ -499,12 +527,13 @@
                         <div class="form-section-title">Core & Streaming</div>
                         <div class="form-grid">
                             <div class="form-group" style="grid-column: 1 / -1;">
-                                <label>FUSE Cache Budget (MB)</label>
-                                <div class="range-group">
-                                    <input type="range" name="read_ahead_budget_mb" min="128" max="512" step="32">
-                                    <span class="range-val" data-for="read_ahead_budget_mb">256 MB</span>
+                                <label>FUSE Cache Budget</label>
+                                <div class="log-slider-val" id="fuse-budget-val">—</div>
+                                <div class="log-slider-wrap">
+                                    <input type="range" name="read_ahead_budget_mb" id="fuse-budget-slider" min="0" max="10" step="1" value="3">
+                                    <div class="log-slider-ticks" id="fuse-budget-ticks"></div>
                                 </div>
-                                <div class="hint">RAM for raCache pre-read buffer (recommended: 256 MB)</div>
+                                <div class="hint">FUSE read-ahead window fed to the player. At 18.8 Mbps 4K: 512 MB ≈ 3.8 min, 2 GB ≈ 15 min, 4 GB ≈ 30 min.</div>
                             </div>
                             <div class="form-group">
                                 <label>Master Concurrency</label>
@@ -702,12 +731,13 @@
                             <div class="form-section">
                                 <div class="form-section-title">Cache & Data</div>
                                 <div class="form-group">
-                                    <label>Cache Size (MB)</label>
-                                    <div class="range-group">
-                                        <input type="range" name="cacheSize" min="64" max="256" step="16">
-                                        <span class="range-val" data-for="cacheSize">64</span>
+                                    <label>GoStorm Cache Size</label>
+                                    <div class="log-slider-val" id="gostorm-cache-val">—</div>
+                                    <div class="log-slider-wrap">
+                                        <input type="range" name="cacheSize" id="gostorm-cache-slider" min="0" max="10" step="1" value="1">
+                                        <div class="log-slider-ticks" id="gostorm-cache-ticks"></div>
                                     </div>
-                                    <div class="hint">GoStorm piece buffer, feeds raCache (recommended: 128 MB)</div>
+                                    <div class="hint" id="cacheSize-hint">GoStorm RAM piece buffer — loading system info…</div>
                                 </div>
                                 <div class="form-group">
                                     <label>Readahead Cache (%)</label>
@@ -965,57 +995,116 @@
         }
         attachWarnings();
 
-        // --- Range Sliders ---
+        // --- Range Sliders (linear %) ---
         document.querySelectorAll('.range-group input[type="range"]').forEach(slider => {
             const label = slider.parentElement.querySelector('.range-val');
-            const suffix = slider.name.includes('_mb') || slider.name === 'cacheSize' ? ' MB' : '%';
+            const suffix = '%';
             slider.addEventListener('input', () => { label.textContent = slider.value + suffix; });
         });
 
+        // --- Logarithmic power-of-2 sliders ---
+        // Each stop = 64 * 2^position MB. Stops: 64,128,256,512,1024,...
+        // maxStops is set dynamically once sysinfo loads.
+        const LOG_BASE_MB = 64; // stop 0 = 64 MB
+
+        function logStopToMB(stop) { return LOG_BASE_MB * Math.pow(2, stop); }
+        function mbToLogStop(mb, maxStop) {
+            const stop = Math.round(Math.log2(mb / LOG_BASE_MB));
+            return Math.max(0, Math.min(maxStop, stop));
+        }
+        function fmtLogMB(mb) {
+            if (mb >= 1024) return (mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1) + ' GB';
+            return mb + ' MB';
+        }
+
+        function buildLogSlider(sliderId, ticksId, valId, maxMB) {
+            const slider = document.getElementById(sliderId);
+            const ticks  = document.getElementById(ticksId);
+            const valEl  = document.getElementById(valId);
+            if (!slider || !ticks) return;
+
+            // Compute max stop (floor to power of 2 ≤ maxMB)
+            const maxStop = Math.floor(Math.log2(maxMB / LOG_BASE_MB));
+            slider.min   = 0;
+            slider.max   = maxStop;
+            slider.step  = 1;
+
+            // Build tick labels
+            ticks.innerHTML = '';
+            for (let i = 0; i <= maxStop; i++) {
+                const span = document.createElement('span');
+                span.textContent = fmtLogMB(logStopToMB(i));
+                ticks.appendChild(span);
+            }
+
+            const update = () => {
+                const mb = logStopToMB(parseInt(slider.value));
+                if (valEl) valEl.textContent = fmtLogMB(mb);
+            };
+            slider.addEventListener('input', update);
+            update();
+            return { slider, maxStop };
+        }
+
+        // Initialized after sysinfo loads; returns MB value for form submission
+        function getLogSliderMB(sliderId) {
+            const el = document.getElementById(sliderId);
+            return el ? logStopToMB(parseInt(el.value)) : 0;
+        }
+        function setLogSliderMB(sliderId, valId, mb) {
+            const slider = document.getElementById(sliderId);
+            const valEl  = document.getElementById(valId);
+            if (!slider) return;
+            slider.value = mbToLogStop(mb, parseInt(slider.max));
+            if (valEl) valEl.textContent = fmtLogMB(logStopToMB(parseInt(slider.value)));
+        }
+
         // --- Readahead Metric (informative only, no auto-adjust) ---
+        const LARGE_CACHE_THRESHOLD_MB = 4 * 1024; // 4 GB
         function updateReadaheadCoupling() {
-            const budgetSlider = document.querySelector('[name="read_ahead_budget_mb"]');
-            const cacheSizeSlider = document.querySelector('[name="cacheSize"]');
-            const pctSlider = document.querySelector('[name="readerReadAHead"]');
+            const pctRow = document.querySelector('[name="readerReadAHead"]')?.closest('.form-group');
             const metric = document.getElementById('readahead-metric');
-            if (!budgetSlider || !cacheSizeSlider || !pctSlider || !metric) return;
+            if (!metric) return;
 
-            const budget = parseInt(budgetSlider.value);
-            const cacheSize = parseInt(cacheSizeSlider.value);
-            const pct = parseInt(pctSlider.value);
+            const cacheSize = getLogSliderMB('gostorm-cache-slider');
+
+            // When GoStorm cache is large, readahead % tuning is irrelevant — hide it
+            if (cacheSize >= LARGE_CACHE_THRESHOLD_MB) {
+                if (pctRow) pctRow.style.display = 'none';
+                metric.style.color = '#4caf50';
+                metric.textContent = `✓ GoStorm cache (${fmtLogMB(cacheSize)}) is large enough to serve any FUSE request without stalling`;
+                return;
+            }
+
+            if (pctRow) pctRow.style.display = '';
+            const pctSlider = document.querySelector('[name="readerReadAHead"]');
+            if (!pctSlider) return;
+
+            const budget    = getLogSliderMB('fuse-budget-slider');
+            const pct       = parseInt(pctSlider.value);
             const effective = Math.round(cacheSize * pct / 100);
+            const headroom  = budget - effective;
 
-            const headroom = budget - effective;
-            if (effective > budget) {
+            if (effective < 64) {
                 metric.style.color = '#ff9800';
-                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ exceeds budget`;
-            } else if (effective < 64) {
+                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ too low for smooth streaming (min 64 MB)`;
+            } else if (effective < budget) {
                 metric.style.color = '#ff9800';
-                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ too low for smooth streaming (min 4 chunks = 64 MB)`;
+                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ GoStorm readahead smaller than FUSE budget — risk of stalls`;
             } else if (headroom < 16) {
                 metric.style.color = '#ff9800';
-                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ headroom too low (${headroom} MB), risk of stalls`;
-            } else if (pct > 75) {
-                metric.style.color = '#ff9800';
-                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ Readahead % above recommended (75%)`;
-            } else if (pct < 50) {
-                metric.style.color = '#ff9800';
-                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ Readahead % too low (min 50%)`;
-            } else if (cacheSize > budget) {
-                metric.style.color = '#ff9800';
-                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ Cache Size exceeds Budget, wasted GoStorm RAM`;
-            } else if (budget >= cacheSize * 4) {
-                metric.style.color = '#ff9800';
-                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ Budget too large for Cache Size, wasted RAM`;
+                metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ⚠ headroom too low (${headroom} MB)`;
             } else {
                 metric.style.color = '#4caf50';
                 metric.textContent = `Effective readahead: ${effective} MB / Budget: ${budget} MB ✓`;
             }
         }
-        ['read_ahead_budget_mb', 'cacheSize', 'readerReadAHead'].forEach(name => {
+        ['readerReadAHead'].forEach(name => {
             const el = document.querySelector(`[name="${name}"]`);
             if (el) el.addEventListener('input', updateReadaheadCoupling);
         });
+        document.getElementById('fuse-budget-slider')?.addEventListener('input', updateReadaheadCoupling);
+        document.getElementById('gostorm-cache-slider')?.addEventListener('input', updateReadaheadCoupling);
         // Only run coupling after both GoStream and GoStorm have loaded real values
         let _couplingLoaded = 0;
         function markCouplingLoaded() { if (++_couplingLoaded >= 2) updateReadaheadCoupling(); }
@@ -1041,6 +1130,10 @@
                 originalEngine = await res.json();
                 const form = document.getElementById('gostream-form');
                 ENGINE_ROOT_KEYS.forEach(k => {
+                    if (k === 'read_ahead_budget_mb') {
+                        setLogSliderMB('fuse-budget-slider', 'fuse-budget-val', originalEngine[k]);
+                        return;
+                    }
                     const input = document.querySelector(`[name="${k}"]`);
                     if (input) {
                         input.value = originalEngine[k] || "";
@@ -1078,6 +1171,11 @@
             const data = { ...originalEngine };
 
             ENGINE_ROOT_KEYS.forEach(k => {
+                if (k === 'read_ahead_budget_mb') {
+                    data[k] = getLogSliderMB('fuse-budget-slider');
+                    return;
+                }
+
                 let v = formData.get(k);
 
                 // If field is missing from form or empty string, skip it to preserve original/default
@@ -1146,8 +1244,7 @@
                 originalCore = await res.json();
                 const form = document.getElementById('gostorm-form');
                 const csVal = Math.round(originalCore.CacheSize / (1024 * 1024));
-                form.querySelector('[name="cacheSize"]').value = csVal;
-                form.querySelector('[data-for="cacheSize"]').textContent = csVal + ' MB';
+                setLogSliderMB('gostorm-cache-slider', 'gostorm-cache-val', csVal);
                 form.querySelector('[name="readerReadAHead"]').value = originalCore.ReaderReadAHead;
                 form.querySelector('[data-for="readerReadAHead"]').textContent = originalCore.ReaderReadAHead + '%';
                 markCouplingLoaded();
@@ -1175,7 +1272,7 @@
             const status = document.getElementById('gostorm-status');
             const formData = new FormData(e.target);
             const sets = { ...originalCore };
-            sets.CacheSize = parseInt(formData.get('cacheSize')) * 1024 * 1024;
+            sets.CacheSize = getLogSliderMB('gostorm-cache-slider') * 1024 * 1024;
             sets.ReaderReadAHead = parseInt(formData.get('readerReadAHead'));
             sets.DownloadRateLimit = (parseInt(formData.get('downloadRateLimit')) || 0) * 1024;
             sets.UploadRateLimit = (parseInt(formData.get('uploadRateLimit')) || 0) * 1024;
@@ -1200,6 +1297,29 @@
             setTimeout(() => { status.className = "status-msg"; }, 5000);
             if (res.ok) loadCore();
         };
+
+        // Build log sliders and set max from live system RAM
+        (async function () {
+            try {
+                const res = await fetch('/api/sysinfo', { signal: AbortSignal.timeout(3000) });
+                if (!res.ok) throw new Error('sysinfo unavailable');
+                const { total_ram_bytes } = await res.json();
+                const totalGB = (total_ram_bytes / 1024 / 1024 / 1024).toFixed(0);
+                const halfMB  = Math.floor(total_ram_bytes / 1024 / 1024 / 2);
+                const halfGB  = (halfMB / 1024).toFixed(0);
+                buildLogSlider('fuse-budget-slider', 'fuse-budget-ticks', 'fuse-budget-val', 512);
+                buildLogSlider('gostorm-cache-slider', 'gostorm-cache-ticks', 'gostorm-cache-val', halfMB);
+                const hint = document.getElementById('cacheSize-hint');
+                if (hint) hint.textContent =
+                    `GoStorm RAM piece buffer. System RAM: ${totalGB} GB — max recommended: ${halfGB} GB (50%). Higher = more content cached in RAM, fewer re-downloads when seeking.`;
+            } catch (_) {
+                // Fall back to 64 GB max if sysinfo fails
+                buildLogSlider('fuse-budget-slider', 'fuse-budget-ticks', 'fuse-budget-val', 512);
+                buildLogSlider('gostorm-cache-slider', 'gostorm-cache-ticks', 'gostorm-cache-val', 64 * 1024);
+                const hint = document.getElementById('cacheSize-hint');
+                if (hint) hint.textContent = 'GoStorm RAM piece buffer — (system RAM could not be determined, max 64 GB shown).';
+            }
+        })();
 
         loadEngine();
         loadCore();
