@@ -11,12 +11,23 @@ import requests
 from typing import List, Dict, Any, Optional
 
 class ProwlarrClient:
-    def __init__(self):
-        # Configuration - Set to True to use Prowlarr, False to use Torrentio only
-        self.ENABLED = False
-        
-        self.API_KEY = "<YOUR-API-KEY>"
-        self.BASE_URL = "http://<YOUR-IP>:9696"
+    def __init__(self, config_path=None):
+        # Load config from GoStream config.json (co-located with binary, one level up from scripts/)
+        if config_path is None:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            config_path = os.path.join(script_dir, '..', 'config.json')
+
+        prowlarr_cfg = {}
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+                prowlarr_cfg = cfg.get('prowlarr', {})
+        except Exception as e:
+            logging.warning(f"Could not load Prowlarr config from {config_path}: {e}")
+
+        self.ENABLED = prowlarr_cfg.get('enabled', False)
+        self.API_KEY = prowlarr_cfg.get('api_key', '')
+        self.BASE_URL = prowlarr_cfg.get('url', '')
         self.SEARCH_ENDPOINT = f"{self.BASE_URL}/api/v1/search"
         self.session = requests.Session()
         self.session.headers.update({
