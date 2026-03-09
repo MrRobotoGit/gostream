@@ -52,14 +52,14 @@ type AITweak struct {
 }
 
 func (t *AITweak) Sanitize() {
-	if t.ConnectionsLimit < 15 {
-		t.ConnectionsLimit = 15
+	if t.ConnectionsLimit < 10 {
+		t.ConnectionsLimit = 10
 	}
 	if t.ConnectionsLimit > 60 {
 		t.ConnectionsLimit = 60
 	}
-	if t.PeerTimeout < 15 {
-		t.PeerTimeout = 15
+	if t.PeerTimeout < 10 {
+		t.PeerTimeout = 10
 	}
 	if t.PeerTimeout > 60 {
 		t.PeerTimeout = 60
