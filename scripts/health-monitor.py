@@ -71,6 +71,7 @@ PRELOAD_SIZE_MB = 128  # MB to preload
 FUSE_METRICS_URL = f"http://127.0.0.1:{_cfg.get('metrics_port', 8096)}/metrics"
 PLEX_URL = _cfg.get('plex', {}).get('url', 'http://127.0.0.1:32400')
 PLEX_TOKEN = _cfg.get('plex', {}).get('token', '')
+VPN_INTERFACE = (_cfg.get('natpmp') or {}).get('vpn_interface', '').strip()
 PLEX_INSECURE_TLS = _env_truthy(os.environ.get('GOSTREAM_PLEX_INSECURE_TLS') or os.environ.get('PLEX_INSECURE_TLS'))
 PLEX_URL = _normalize_plex_url(PLEX_URL, PLEX_INSECURE_TLS)
 if PLEX_INSECURE_TLS:
@@ -967,22 +968,40 @@ def check_system() -> None:
         logger.error(f"System check failed: {e}")
 
 
+def _resolve_vpn_interface(stats: Dict[str, Any]) -> Optional[str]:
+    """Pick the configured VPN interface, falling back to common tunnel names."""
+    candidates = []
+    if VPN_INTERFACE:
+        candidates.append(VPN_INTERFACE)
+    candidates.extend(["tun0", "wg0"])
+
+    seen = set()
+    for name in candidates:
+        if name in seen:
+            continue
+        seen.add(name)
+        if name in stats:
+            return name
+    return None
+
+
 def check_vpn() -> None:
-    """Check WireGuard (wg0) status and Public IP."""
+    """Check the configured VPN tunnel status and Public IP."""
     global vpn_public_ip_cache
     try:
         stats = psutil.net_if_stats()
         addrs = psutil.net_if_addrs()
-        
-        if "wg0" in stats:
-            is_up = stats["wg0"].isup
+
+        iface = _resolve_vpn_interface(stats)
+        if iface:
+            is_up = stats[iface].isup
             internal_ip = "unknown"
-            if "wg0" in addrs:
-                for addr in addrs["wg0"]:
+            if iface in addrs:
+                for addr in addrs[iface]:
                     if addr.family == socket.AF_INET:
                         internal_ip = addr.address
                         break
-            
+
             # Get Public IP (Cached 60s)
             public_ip = vpn_public_ip_cache["ip"]
             if is_up and (time.time() - vpn_public_ip_cache["timestamp"] > 60):
@@ -996,12 +1015,19 @@ def check_vpn() -> None:
 
             health_data["vpn"] = {
                 "status": "ok" if is_up else "error",
+                "interface": iface,
                 "ip": internal_ip,
                 "public_ip": public_ip,
                 "is_up": is_up
             }
         else:
-             health_data["vpn"] = {"status": "error", "ip": "down", "public_ip": "--", "is_up": False}
+             health_data["vpn"] = {
+                 "status": "error",
+                 "interface": VPN_INTERFACE or "--",
+                 "ip": "down",
+                 "public_ip": "--",
+                 "is_up": False
+             }
     except Exception as e:
         health_data["vpn"] = {"status": "error", "ip": "error", "public_ip": "error", "error": str(e)}
 
