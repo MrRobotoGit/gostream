@@ -64,9 +64,6 @@ func (t *AITweak) Sanitize() {
 	if t.PeerTimeout < 10 {
 		t.PeerTimeout = 10
 	}
-	if t.PeerTimeout > 60 {
-		t.PeerTimeout = 60
-	}
 }
 
 func crisisActive() bool {
