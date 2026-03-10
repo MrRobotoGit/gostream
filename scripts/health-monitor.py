@@ -975,11 +975,7 @@ def _resolve_vpn_interface(stats: Dict[str, Any]) -> Optional[str]:
         candidates.append(VPN_INTERFACE)
     candidates.extend(["tun0", "wg0"])
 
-    seen = set()
-    for name in candidates:
-        if name in seen:
-            continue
-        seen.add(name)
+    for name in dict.fromkeys(candidates):
         if name in stats:
             return name
     return None
