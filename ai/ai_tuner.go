@@ -269,7 +269,6 @@ func runTuningCycle(aiURL string) {
 	}
 	historyStr := strings.Join(metricsHistory, " -> ")
 
-
 	fSize := activeT.Size
 	if fSize == 0 {
 		fSize = activeT.Torrent.Length()
@@ -289,11 +288,9 @@ func runTuningCycle(aiURL string) {
 		historyPrefix = "history=" + historyStr + " "
 	}
 	prompt := fmt.Sprintf(
-		"<|im_start|>system\nTune BitTorrent parms for performance 4K Movie streaming. connections_limit MUST be between 10-60. peer_timeout_seconds MUST be between 10-60. Output JSON: {\"connections_limit\":N,\"peer_timeout_seconds\":M}<|im_end|>\n<|im_start|>user\nactual Peers in Swarm %d file=%.1fGB - %sspeed=%.0fMB/s cpu=%d%% buf=%d%% peers=%d trend=%s<|im_end|>\n<|im_start|>assistant\n",
+		"<|im_start|>system\nTune BitTorrent parms for performance 4K Movie streaming. connections_limit MUST be between 10-60. peer_timeout_seconds MUST be between 10-60. Output JSON: {\"connections_limit\":N,\"peer_timeout_seconds\":M}<|im_end|>\n<|im_start|>user\nactual Peers in Swarm %d. File size %.1fGB - %sspeed=%.0fMB/s cpu=%d%% buf=%d%% peers=%d trend=%s<|im_end|>\n<|im_start|>assistant\n",
 		activeStats.TotalPeers, fileSizeGB, historyPrefix, currSpeedMBs, int(currentCPU), buffer, activeStats.ActivePeers, speedTrendStr,
 	)
-	_ = contextStr
-
 	tweak, err := fetchAIJSON[AITweak](aiURL, prompt)
 	if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
