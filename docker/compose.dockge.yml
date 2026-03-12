@@ -34,7 +34,7 @@ services:
       - plex_config:/config
       - plex_transcode:/transcode
       - ${GOSTREAM_REAL_PATH:-B:/Documents/Docker Stuff/gostream-mkv-real}:/mnt/gostream-mkv-real
-      - ${GOSTREAM_CONFIG_FILE:-B:/Documents/Docker Stuff/gostream/config.json}:/config/config.json
+      - ${GOSTREAM_CONFIG_FILE:-B:/Documents/Docker Stuff/gostream-mkv-real/config/config.json}:/config/config.json
       - ${POPCORN_PATH:-P:/Popcorn Time}:/data/popcorn-time
 
 volumes:

@@ -40,6 +40,16 @@ COPY config.json.example /app/config.json.example
 # Add s6 init scripts + supervised services for GoStream + (optional) health monitor.
 COPY docker/plex-gostream-root/ /
 
+# Normalize potential CRLF line endings from Windows checkouts and ensure executability.
+RUN sed -i 's/\r$//' \
+      /etc/cont-init.d/10-gostream-config \
+      /etc/services.d/gostream/run \
+      /etc/services.d/health-monitor/run \
+    && chmod +x \
+      /etc/cont-init.d/10-gostream-config \
+      /etc/services.d/gostream/run \
+      /etc/services.d/health-monitor/run
+
 ENV PATH=/opt/venv/bin:$PATH
 
 # GoStream defaults (override via docker-compose env vars)

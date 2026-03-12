@@ -39,7 +39,7 @@ services:
         source: "P:/Popcorn Time"
         target: /data/popcorn-time
       - type: bind
-        source: "B:/Documents/Docker Stuff/gostream/config.json"
+        source: "B:/Documents/Docker Stuff/gostream-mkv-real/config/config.json"
         target: /config/config.json
 
 volumes:
