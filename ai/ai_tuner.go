@@ -149,8 +149,10 @@ func runTuningCycle(aiURL string) {
 		cpuUsageAvg = nil
 		cycleCounter = 0
 		peakCPUCycle = 0
+		if lastActiveHash != "" {
+			go resetLlamaCache(aiURL)
+		}
 		lastActiveHash = ""
-		go resetLlamaCache(aiURL)
 		return
 	}
 
