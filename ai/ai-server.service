@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/GoStream/ai
+ExecStartPre=/bin/mkdir -p /tmp/llama-slots
 ExecStart=/home/pi/GoStream/ai/llama.cpp/build/bin/llama-server -m /home/pi/GoStream/ai/models/Qwen_Qwen3-0.6B-Q4_K_M.gguf --port 8085 -t 4 -c 512 --host 0.0.0.0 -np 1 --mlock --slot-save-path /tmp/llama-slots
 LimitMEMLOCK=infinity
 Restart=always
