@@ -1,0 +1,44 @@
+name: jellyfin-gostream
+
+services:
+  jellyfin_gostream:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.jellyfin
+    container_name: jellyfin-gostream
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    environment:
+      - TZ=Etc/UTC
+      - MKV_PROXY_CONFIG_PATH=/config/config.json
+      - GOSTREAM_ROOT_PATH=/config/gostream
+      - GOSTREAM_SOURCE_PATH=/mnt/gostream-mkv-real
+      - GOSTREAM_MOUNT_PATH=/mnt/gostream-mkv-virtual
+      - GOSTREAM_STATE_DIR=/config/gostream/STATE
+      - GOSTREAM_LOG_DIR=/config/gostream/logs
+      - HEALTH_MONITOR_PORT=8095
+      - GOSTREAM_HEALTH_MONITOR_ENABLED=1
+      - MKV_PROXY_METRICS_PORT=${MKV_PROXY_METRICS_PORT:-8097}
+    ports:
+      - "${JELLYFIN_HTTP_PORT:-8096}:8096"
+      - "${GOSTORM_HTTP_PORT:-8090}:8090"
+      - "${GOSTREAM_HEALTH_PORT:-8095}:8095"
+      - "${GOSTREAM_CONTROL_PORT:-8097}:8097"
+    volumes:
+      - jellyfin_config:/config
+      - jellyfin_cache:/cache
+      - type: bind
+        source: "${GOSTREAM_REAL_PATH}"
+        target: /mnt/gostream-mkv-real
+      - type: bind
+        source: "${GOSTREAM_CONFIG_FILE}"
+        target: /config/config.json
+
+volumes:
+  jellyfin_config:
+  jellyfin_cache:

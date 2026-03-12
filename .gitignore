@@ -29,3 +29,18 @@ gostream
 .gemini/
 gha-creds-*.json
 .sisyphus
+
+# Local dotenv files (keep examples tracked)
+.env
+.env.*
+!.env*.example
+
+# Compose overrides used only locally
+docker-compose.override.yml
+docker/compose.override.yml
+docker/compose.*.local.yml
+
+# Local Sisyphus artifacts
+.sisyphus/evidence/
+.sisyphus/drafts/
+.sisyphus/boulder.json

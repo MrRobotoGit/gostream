@@ -289,6 +289,11 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("MKV_PROXY_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
 	}
+	if v := os.Getenv("MKV_PROXY_METRICS_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.MetricsPort = n
+		}
+	}
 	if v := os.Getenv("MKV_PROXY_UID"); v != "" {
 		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
 			c.UID = uint32(n)

@@ -1,0 +1,62 @@
+FROM golang:1.24-bookworm AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential pkg-config libfuse3-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+ARG TARGETARCH
+
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=$TARGETARCH go build -pgo=auto -o /out/gostream .
+
+
+FROM jellyfin/jellyfin:latest
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      fuse3 \
+      iptables \
+      python3 \
+      python3-venv \
+      tini \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt /tmp/requirements.txt
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm -f /tmp/requirements.txt
+
+COPY --from=build /out/gostream /usr/local/bin/gostream
+COPY scripts /app/scripts
+COPY config.json.example /app/config.json.example
+COPY docker/jellyfin-gostream-entrypoint.sh /usr/local/bin/jellyfin-gostream-entrypoint.sh
+
+RUN sed -i 's/\r$//' /usr/local/bin/jellyfin-gostream-entrypoint.sh \
+    && chmod +x /usr/local/bin/jellyfin-gostream-entrypoint.sh
+
+ENV PATH=/opt/venv/bin:$PATH
+
+ENV MKV_PROXY_CONFIG_PATH=/config/config.json
+ENV GOSTREAM_ROOT_PATH=/config/gostream
+ENV GOSTREAM_SOURCE_PATH=/mnt/gostream-mkv-real
+ENV GOSTREAM_MOUNT_PATH=/mnt/gostream-mkv-virtual
+ENV GOSTREAM_STATE_DIR=/config/gostream/STATE
+ENV GOSTREAM_LOG_DIR=/config/gostream/logs
+ENV HEALTH_MONITOR_PORT=8095
+ENV GOSTREAM_HEALTH_MONITOR_ENABLED=1
+ENV MKV_PROXY_METRICS_PORT=8097
+
+ENV JELLYFIN_DATA_DIR=/config/data
+ENV JELLYFIN_CONFIG_DIR=/config/config
+ENV JELLYFIN_CACHE_DIR=/cache
+ENV JELLYFIN_LOG_DIR=/config/log
+
+EXPOSE 8090 8095 8097 8096
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/jellyfin-gostream-entrypoint.sh"]

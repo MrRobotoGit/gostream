@@ -3208,7 +3208,7 @@ func main() {
 		}()
 	})
 
-	go http.ListenAndServe(":8096", nil)
+	go http.ListenAndServe(fmt.Sprintf(":%d", globalConfig.MetricsPort), nil)
 
 	// V133: Setup signal handler for graceful shutdown
 	// This ensures inode map is saved before exit

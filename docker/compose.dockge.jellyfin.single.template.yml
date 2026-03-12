@@ -1,11 +1,12 @@
-name: plex-gostream
+name: jellyfin-gostream
 
 services:
-  plex_gostream:
+  jellyfin_gostream:
+    container_name: jellyfin-gostream
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.plex
-    container_name: plex-gostream
+      context: ${GOSTREAM_CONTEXT}
+      dockerfile: docker/Dockerfile.jellyfin
+    restart: unless-stopped
     privileged: true
     devices:
       - /dev/fuse:/dev/fuse
@@ -14,8 +15,6 @@ services:
       - NET_ADMIN
     environment:
       - TZ=${TZ:-Etc/UTC}
-      - PLEX_CLAIM=${PLEX_CLAIM}
-      - ADVERTISE_IP=${ADVERTISE_IP}
       - MKV_PROXY_CONFIG_PATH=/config/config.json
       - GOSTREAM_ROOT_PATH=/config/gostream
       - GOSTREAM_SOURCE_PATH=/mnt/gostream-mkv-real
@@ -24,18 +23,18 @@ services:
       - GOSTREAM_LOG_DIR=/config/gostream/logs
       - HEALTH_MONITOR_PORT=8095
       - GOSTREAM_HEALTH_MONITOR_ENABLED=1
+      - MKV_PROXY_METRICS_PORT=8097
     ports:
-      - "32401:32400/tcp"
-      - "8090:8090"
-      - "8095:8095"
-      - "8096:8096"
+      - "${JELLYFIN_HTTP_PORT:-8096}:8096"
+      - "${GOSTORM_HTTP_PORT:-8090}:8090"
+      - "${GOSTREAM_HEALTH_PORT:-8095}:8095"
+      - "${GOSTREAM_CONTROL_PORT:-8097}:8097"
     volumes:
-      - plex_config:/config
-      - plex_transcode:/transcode
+      - jellyfin_config:/config
+      - jellyfin_cache:/cache
       - "${GOSTREAM_REAL_PATH}:/mnt/gostream-mkv-real"
-      - "${MEDIA_LIBRARY_PATH}:/data/popcorn-time"
       - "${GOSTREAM_CONFIG_FILE}:/config/config.json"
 
 volumes:
-  plex_config:
-  plex_transcode:
+  jellyfin_config:
+  jellyfin_cache:

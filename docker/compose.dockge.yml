@@ -4,7 +4,7 @@ services:
   plex_gostream:
     container_name: plex-gostream
     build:
-      context: ${GOSTREAM_CONTEXT:-B:/Documents/Github/Forks/gostream}
+      context: ${GOSTREAM_CONTEXT:-/path/to/gostream}
       dockerfile: docker/Dockerfile.plex
     restart: unless-stopped
     privileged: true
@@ -16,7 +16,7 @@ services:
     environment:
       - TZ=${TZ:-Etc/UTC}
       - PLEX_CLAIM=${PLEX_CLAIM:-}
-      - ADVERTISE_IP=${ADVERTISE_IP:-http://192.168.0.144:32401/}
+      - ADVERTISE_IP=${ADVERTISE_IP:-http://YOUR_LAN_IP:32401/}
       - MKV_PROXY_CONFIG_PATH=/config/config.json
       - GOSTREAM_ROOT_PATH=/config/gostream
       - GOSTREAM_SOURCE_PATH=/mnt/gostream-mkv-real
@@ -33,9 +33,9 @@ services:
     volumes:
       - plex_config:/config
       - plex_transcode:/transcode
-      - ${GOSTREAM_REAL_PATH:-B:/Documents/Docker Stuff/gostream-mkv-real}:/mnt/gostream-mkv-real
-      - ${GOSTREAM_CONFIG_FILE:-B:/Documents/Docker Stuff/gostream-mkv-real/config/config.json}:/config/config.json
-      - ${POPCORN_PATH:-P:/Popcorn Time}:/data/popcorn-time
+      - ${GOSTREAM_REAL_PATH:-/path/to/gostream-mkv-real}:/mnt/gostream-mkv-real
+      - ${GOSTREAM_CONFIG_FILE:-/path/to/gostream-mkv-real/config/config.json}:/config/config.json
+      - ${POPCORN_PATH:-/path/to/popcorn-time}:/data/popcorn-time
 
 volumes:
   plex_config:
