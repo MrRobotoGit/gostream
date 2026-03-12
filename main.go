@@ -1130,17 +1130,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			atomic.StoreInt64(&h.lastOff, resumeOffset)
 		}
 
-		// V-lookahead: on cold start (resumeOffset=0), offset the pump by 1 chunk so it
-		// downloads [chunkSize, 2×chunkSize) while FetchBlock serves [0, chunkSize).
-		// When the player reaches chunkSize, the pump has it ready → raCache HIT.
 		pumpStart := resumeOffset
-		if resumeOffset == 0 {
-			pumpChunk := int64(globalConfig.ReadAheadBase)
-			if pumpChunk == 0 {
-				pumpChunk = 16 * 1024 * 1024
-			}
-			pumpStart = pumpChunk
-		}
 		capturedState := sharedState
 		safeGo(func() {
 			h.nativePump(pumpCtx, pumpStart, capturedState)

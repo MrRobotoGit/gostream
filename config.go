@@ -180,7 +180,7 @@ func LoadConfig() Config {
 		// Legacy Fixed Defaults
 		DefaultFileSize:         30 * 1024 * 1024 * 1024,
 		ReadAheadBase:           16 * 1024 * 1024,
-		ReadAheadInitial:        16 * 1024 * 1024,
+		ReadAheadInitial:        2 * 1024 * 1024,
 		SequentialTolerance:     512 * 1024,
 		RateLimitRequestsPerSec: 500,
 		KeepaliveInterval:       15 * time.Second,

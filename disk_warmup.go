@@ -56,11 +56,10 @@ type sizeEntry struct {
 	updatedAt time.Time
 }
 
-// V265: tailRange tracks the actually-written byte range in a tail warmup file.
+// V265: tailRange tracks contiguous bytes written from relOffset=0 in a tail warmup file.
 type tailRange struct {
-	mu     sync.Mutex // BUG-1: protects minOff/maxOff against concurrent WriteTail/ReadTail
-	minOff int64      // lowest relative offset written
-	maxOff int64      // highest relative offset + bytes written
+	mu            sync.Mutex // protects highWatermark against concurrent WriteTail/ReadTail
+	highWatermark int64      // contiguous bytes written from relOffset=0
 }
 
 // DiskWarmupCache persists the first 128MB of each streamed file to SSD.
@@ -351,13 +350,13 @@ func (d *DiskWarmupCache) WriteTail(hash string, fileID int, data []byte, absolu
 	if val, ok := d.tailCoverage.Load(path); ok {
 		tr := val.(*tailRange)
 		tr.mu.Lock()
-		done := tr.minOff == 0 && tr.maxOff >= tailWarmupSize
+		done := tr.highWatermark >= tailWarmupSize
 		tr.mu.Unlock()
 		if done {
 			return
 		}
 	} else if fi, err := os.Stat(path); err == nil && fi.Size() >= tailWarmupSize {
-		d.tailCoverage.Store(path, &tailRange{minOff: 0, maxOff: fi.Size()})
+		d.tailCoverage.Store(path, &tailRange{highWatermark: fi.Size()})
 		return
 	}
 
@@ -387,15 +386,16 @@ func (d *DiskWarmupCache) WriteTail(hash string, fileID int, data []byte, absolu
 	if val, ok := d.tailCoverage.Load(path); ok {
 		tr := val.(*tailRange)
 		tr.mu.Lock()
-		if relOffset < tr.minOff {
-			tr.minOff = relOffset
-		}
-		if endOff > tr.maxOff {
-			tr.maxOff = endOff
+		if relOffset == tr.highWatermark {
+			tr.highWatermark = endOff
 		}
 		tr.mu.Unlock()
 	} else {
-		d.tailCoverage.Store(path, &tailRange{minOff: relOffset, maxOff: endOff})
+		hw := int64(0)
+		if relOffset == 0 {
+			hw = endOff
+		}
+		d.tailCoverage.Store(path, &tailRange{highWatermark: hw})
 	}
 }
 
@@ -415,7 +415,7 @@ func (d *DiskWarmupCache) ReadTail(hash string, fileID int, buf []byte, absolute
 	if val, ok := d.tailCoverage.Load(path); ok {
 		tr := val.(*tailRange)
 		tr.mu.Lock()
-		miss := relOffset < tr.minOff || readEnd > tr.maxOff
+		miss := readEnd > tr.highWatermark
 		tr.mu.Unlock()
 		if miss {
 			return 0, nil
@@ -425,7 +425,7 @@ func (d *DiskWarmupCache) ReadTail(hash string, fileID int, buf []byte, absolute
 		if err != nil || fi.Size() < tailWarmupSize {
 			return 0, nil
 		}
-		d.tailCoverage.Store(path, &tailRange{minOff: 0, maxOff: fi.Size()})
+		d.tailCoverage.Store(path, &tailRange{highWatermark: fi.Size()})
 	}
 
 	f, err := d.getHandle(path)
