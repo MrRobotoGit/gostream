@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 
 	"gostream/internal/gostorm/torr"
 	"gostream/internal/gostorm/torr/state"
+	"gostream/internal/gostorm/torr/storage/torrstor"
 	apiUtils "gostream/internal/gostorm/web/api/utils"
 	"log"
 	"sync"
@@ -19,7 +19,7 @@ import (
 // eliminating HTTP overhead for metadata operations.
 type NativeClient struct {
 	// Stateless client
-	activeHashes  sync.Map      // Map[string]bool - Fast lookup for active torrents
+	activeHashes  sync.Map     // Map[string]bool - Fast lookup for active torrents
 	wakeSemaphore chan struct{} // V239: Limit concurrent Wake calls (max 10)
 }
 
@@ -155,15 +155,14 @@ type NativeReader struct {
 	hash         string
 	fileID       int
 	offset       int64
-	pipeReader   *io.PipeReader
-	pipeWriter   *io.PipeWriter
-	cancelFunc   context.CancelFunc
+	reader       *torrstor.Reader
+	readerPtr    atomic.Pointer[torrstor.Reader] // V286: lock-free access for Interrupt()
 	closed       bool
 	lastActivity time.Time
-	interrupted  atomic.Bool // V286: set by Interrupt(), cleared by next startStream
+	interrupted  atomic.Bool // V286: set by Interrupt(), cleared by next openReader
 }
 
-// ErrInterrupted is returned by ReadAt when the pipe was closed by Interrupt().
+// ErrInterrupted is returned by ReadAt when the reader was closed by Interrupt().
 var ErrInterrupted = fmt.Errorf("interrupted by seek")
 
 // ReadAt implements io.ReaderAt.
@@ -179,67 +178,65 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 
 	// V286: Check for interrupt BEFORE any operation
 	if r.interrupted.Swap(false) {
-		r.closeStream()
+		r.closeReader()
 		return 0, ErrInterrupted
 	}
 
 	// 1. Sequential Match
-	if r.pipeReader != nil && off == r.offset {
-		n, err = io.ReadFull(r.pipeReader, p)
+	if r.reader != nil && off == r.offset {
+		n, err = r.reader.Read(p)
 		r.offset += int64(n)
-		
+
 		if err == nil || err == io.EOF || err == io.ErrUnexpectedEOF {
 			return n, nil
 		}
 
-		// V286: If the pipe was closed by Interrupt(), return ErrInterrupted
+		// V286: If the reader was closed by Interrupt(), return ErrInterrupted
 		if r.interrupted.Swap(false) {
-			r.closeStream()
+			r.closeReader()
 			return 0, ErrInterrupted
 		}
 
-		// V257: Resilience Fix - If pipe fails, attempt one transparent reconnect
+		// V257: Resilience Fix - If read fails, attempt one transparent reconnect
 		log.Printf("[NativeReader] Sequential Read Error: %v - Attempting Transparent Reconnect at offset %d", err, off)
 	}
 
-	// 2. Smart Seek
-	if r.pipeReader != nil && off > r.offset && off-r.offset < 2*1024*1024 {
-		skip := off - r.offset
-		_, errSkip := io.CopyN(io.Discard, r.pipeReader, skip)
-		if errSkip == nil {
+	// 2. Smart Seek — real seek instead of drain
+	if r.reader != nil && off > r.offset && off-r.offset < 2*1024*1024 {
+		if _, errSeek := r.reader.Seek(off, io.SeekStart); errSeek == nil {
 			r.offset = off
-			n, err = io.ReadFull(r.pipeReader, p)
+			n, err = r.reader.Read(p)
 			r.offset += int64(n)
 			if err == nil || err == io.EOF || err == io.ErrUnexpectedEOF {
 				return n, nil
 			}
 			log.Printf("[NativeReader] Smart Seek Read Error: %v - Attempting Transparent Reconnect at offset %d", err, off)
 		}
-		
+
 		if r.interrupted.Swap(false) {
-			r.closeStream()
+			r.closeReader()
 			return 0, ErrInterrupted
 		}
 	}
 
 	// V286: Final interrupt check before Hard Seek
 	if r.interrupted.Swap(false) {
-		if r.pipeReader != nil {
-			r.closeStream()
+		if r.reader != nil {
+			r.closeReader()
 		}
 		return 0, ErrInterrupted
 	}
 
 	// 4. Hard Seek (Recovery Path for errors or large seeks)
-	if r.pipeReader != nil {
-		r.closeStream()
+	if r.reader != nil {
+		r.closeReader()
 	}
 
-	if err := r.startStream(off); err != nil {
+	if err := r.openReader(off); err != nil {
 		return 0, err
 	}
 
-	n, err = io.ReadFull(r.pipeReader, p)
+	n, err = r.reader.Read(p)
 	r.offset += int64(n)
 	if err == io.ErrUnexpectedEOF {
 		return n, nil
@@ -247,70 +244,47 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 	return n, err
 }
 
-// V286: Interrupt unblocks a blocked ReadAt by closing the pipe reader.
-// Sets interrupted flag so ReadAt returns ErrInterrupted reliably.
+// V286: Interrupt unblocks a blocked ReadAt by closing the underlying anacrolix reader.
+// Uses lock-free readerPtr so Interrupt() never blocks even if ReadAt holds r.mu.
 func (r *NativeReader) Interrupt() {
 	r.interrupted.Store(true)
-	r.mu.Lock()
-	pr := r.pipeReader
-	r.mu.Unlock()
-	if pr != nil {
-		pr.Close() // Reader side close is enough to unblock ReadFull
+	if reader := r.readerPtr.Load(); reader != nil {
+		reader.Reader.Close() // sblocca reader.Read() bloccata sull'anacrolix reader
 	}
 }
 
-func (r *NativeReader) startStream(off int64) error {
-	// V255: Use PeekTorrent to avoid extending expiry timer on every Hard Seek.
+func (r *NativeReader) openReader(off int64) error {
 	t := torr.PeekTorrent(r.hash)
 	if t == nil || t.Torrent == nil {
 		return fmt.Errorf("torrent not found")
 	}
-
-	pr, pw := io.Pipe()
-	r.pipeReader = pr
-	r.pipeWriter = pw
-	r.offset = off
-
-	// V460: Use a context that we can cancel explicitly on Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	r.cancelFunc = cancel
-
-	// Create request with our explicit context
-	req, _ := http.NewRequestWithContext(ctx, "GET", "/stream", nil)
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-", off))
-
-	resp := &PipeResponseWriter{
-		writer: pw,
-		header: make(http.Header),
+	reader, err := t.OpenFile(r.fileID)
+	if err != nil {
+		return err
+	}
+	if _, err := reader.Seek(off, io.SeekStart); err != nil {
+		t.CloseReader(reader)
+		return err
 	}
 
-	go func() {
-		defer pw.Close()
-		if err := t.Stream(r.fileID, req, resp); err != nil {
-			log.Printf("[NativeReader] Stream error at off=%dMB fileID=%d hash=%s: %v",
-				off/(1024*1024), r.fileID, r.hash[:8], err)
-		}
-	}()
+	// V166-Fix: Force initial readahead to trigger anacrolix downloader.
+	// Without this, the native reader might not "wake up" the torrent swarm.
+	reader.SetReadahead(64 << 20) // 64MB initial readahead
 
+	r.reader = reader
+	r.readerPtr.Store(reader) // V286: expose for lock-free Interrupt()
+	r.offset = off
 	return nil
 }
 
-func (r *NativeReader) closeStream() {
-	// V460: Cancel context FIRST to trigger GoStorm exit
-	if r.cancelFunc != nil {
-		r.cancelFunc()
-		r.cancelFunc = nil
-	}
-
-	// Small delay to allow context propagation? No, BoltDB/RAM is fast.
-
-	if r.pipeReader != nil {
-		r.pipeReader.Close()
-		r.pipeReader = nil
-	}
-	if r.pipeWriter != nil {
-		r.pipeWriter.Close()
-		r.pipeWriter = nil
+func (r *NativeReader) closeReader() {
+	if r.reader != nil {
+		r.readerPtr.Store(nil) // V286: clear before close
+		t := torr.PeekTorrent(r.hash)
+		if t != nil {
+			t.CloseReader(r.reader)
+		}
+		r.reader = nil
 	}
 }
 
@@ -318,7 +292,7 @@ func (r *NativeReader) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
-	r.closeStream()
+	r.closeReader()
 	return nil
 }
 
@@ -330,47 +304,49 @@ func (r *NativeReader) IsIdle(d time.Duration) bool {
 
 // FetchBlock performs an atomic, stateless read from the Torrent Core.
 func (c *NativeClient) FetchBlock(hash string, fileID int, offset int64, p []byte) (int, error) {
-	// V255: Use PeekTorrent — same reasoning as startStream above.
 	t := torr.PeekTorrent(hash)
 	if t == nil || t.Torrent == nil {
 		return 0, fmt.Errorf("torrent not found")
 	}
 
-	pr, pw := io.Pipe()
-	// V283: 8s timeout (was 30s). 6 retries × 30s = 180s FUSE block → smbd D-state.
-	// 3 retries × 8s = 27s max → under 60s watchdog threshold.
+	reader, err := t.OpenFile(fileID)
+	if err != nil {
+		return 0, err
+	}
+	defer t.CloseReader(reader)
+
+	if _, err := reader.Seek(offset, io.SeekStart); err != nil {
+		return 0, err
+	}
+
+	// V283: 8s timeout (was 30s). 3 retries × 8s = 27s max → under 60s watchdog threshold.
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", "/stream", nil)
-	endRange := offset + int64(len(p)) - 1
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, endRange))
-
-	resp := &PipeResponseWriter{
-		writer: pw,
-		header: make(http.Header),
+	type result struct {
+		n   int
+		err error
 	}
-
+	ch := make(chan result, 1)
 	go func() {
-		defer pw.Close()
-		t.Stream(fileID, req, resp)
+		n, err := io.ReadFull(reader, p)
+		ch <- result{n, err}
 	}()
 
-	// V283-Fix: Ensure io.ReadFull is unblocked if context expires (8s timeout).
-	// Previously, if t.Stream() stalled without closing the pipe, FetchBlock would hang forever.
-	go func() {
-		<-ctx.Done()
-		pr.Close() // Force unblock io.ReadFull on timeout/cancel
-	}()
-
-	n, err := io.ReadFull(pr, p)
-	pr.Close()
-
-	if err == io.ErrUnexpectedEOF {
-		return n, nil
+	select {
+	case res := <-ch:
+		if res.err == io.ErrUnexpectedEOF {
+			return res.n, nil
+		}
+		return res.n, res.err
+	case <-ctx.Done():
+		reader.Reader.Close() // sblocca la goroutine
+		res := <-ch           // attendi completamento
+		if res.n > 0 {
+			return res.n, nil
+		}
+		return 0, fmt.Errorf("FetchBlock timeout (8s) at offset %d", offset)
 	}
-
-	return n, err
 }
 
 // ListTorrents returns all torrents
@@ -406,16 +382,6 @@ func (c *NativeClient) Preload(hash string, index int, preloadSize int64) {
 		t.Preload(ctx, index, preloadSize)
 	}
 }
-
-// PipeResponseWriter bridges GoStorm's HTTP responses to our Go pipe.
-type PipeResponseWriter struct {
-	writer *io.PipeWriter
-	header http.Header
-}
-
-func (w *PipeResponseWriter) Header() http.Header         { return w.header }
-func (w *PipeResponseWriter) Write(p []byte) (int, error) { return w.writer.Write(p) }
-func (w *PipeResponseWriter) WriteHeader(statusCode int)  {}
 
 // convertStatusToStats maps internal TorrentStatus to our local TorrentStats struct
 func convertStatusToStats(st *state.TorrentStatus) *TorrentStats {

@@ -2,6 +2,7 @@ package torr
 
 import (
 	"errors"
+	"fmt"
 	"gostream/internal/gostorm/torrshash"
 	"sort"
 	"strconv"
@@ -266,6 +267,49 @@ func (t *Torrent) Length() int64 {
 		return 0
 	}
 	return t.Torrent.Length()
+}
+
+// OpenFile returns a torrstor.Reader positioned at offset 0 for the given fileID.
+// Caller must call t.CloseReader(reader) when done.
+func (t *Torrent) OpenFile(fileID int) (*torrstor.Reader, error) {
+	// Ensure cache is wired up. It may be nil if the torrent was added via Wake()
+	// which waits on anacrolix's GotInfo channel but does not call our GotInfo()
+	// method (which is the only code path that sets t.cache via WaitInfo()).
+	if t.cache == nil {
+		if !t.GotInfo() {
+			return nil, errors.New("torrent not ready: GotInfo failed")
+		}
+	}
+	st := t.Status()
+	var stFile *state.TorrentFileStat
+	for _, fileStat := range st.FileStats {
+		if fileStat.Id == fileID {
+			stFile = fileStat
+			break
+		}
+	}
+	if stFile == nil {
+		return nil, fmt.Errorf("file with id %v not found", fileID)
+	}
+	files := t.Files()
+	var file *torrent.File
+	for _, tfile := range files {
+		if tfile.Path() == stFile.Path {
+			file = tfile
+			break
+		}
+	}
+	if file == nil {
+		return nil, fmt.Errorf("file with id %v not found", fileID)
+	}
+	reader := t.NewReader(file)
+	if reader == nil {
+		return nil, errors.New("cannot create torrent reader")
+	}
+	if torrstor.IsResponsive() {
+		reader.SetResponsive()
+	}
+	return reader, nil
 }
 
 func (t *Torrent) NewReader(file *torrent.File) *torrstor.Reader {

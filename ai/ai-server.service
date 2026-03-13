@@ -1,16 +1,11 @@
-[Unit]
-Description=Llama.cpp AI Server for GoStream
-After=network.target
+The Project: I built this because streaming high-bitrate torrents on a Raspberry Pi often hits hardware bottlenecks. GoStream is a unified virtual file system (VFS) that acts as an intelligent proxy, turning remote torrent streams into "local" files for Plex with zero-network metadata latency.
+The Impact: I achieved sub-second start times by implementing a "Native Bridge" for in-memory communication and a custom 32-shard inode mapping system using xxHash for zero-allocation performance. The result is a rock-solid, production-ready binary that’s 60% smaller than legacy builds and immune to the scan-deadlocks common on low-RAM devices.
 
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/GoStream/ai
-ExecStartPre=/bin/mkdir -p /tmp/llama-slots
-ExecStart=/home/pi/GoStream/ai/llama.cpp/build/bin/llama-server -m /home/pi/GoStream/ai/models/Qwen_Qwen3-0.6B-Q4_K_M.gguf --port 8085 -t 4 -c 512 --host 0.0.0.0 -np 1 --mlock --slot-save-path /tmp/llama-slots
-LimitMEMLOCK=infinity
-Restart=always
-RestartSec=10
+The Project: I created this to bridge the gap between streaming habits and local library management. It’s a self-maintaining engine that watches what you listen to on Last.fm and automatically discovers, filters, and queues new artists into your media managers.
 
-[Install]
-WantedBy=multi-user.target
+The Impact: Instead of just pulling every recommendation, I built a modular service layer that uses the MusicBrainz API to intelligently filter out low-quality releases (live bootlegs or compilations), ensuring only studio albums hit the library. It includes a robust retry-logic system with exponential backoff to handle API rate limits gracefully, making the discovery process entirely "set and forget."
+
+
+
+
+I am a Full-Stack Developer and AI Engineer with more than 20 year history of building high-performance e-commerce systems. I specialize in turning complex technical challenges into measurable growth, from developing an AI Wine Sommelier that increased conversions by 12% to leading platform redesigns that achieved a 28% lift. My expertise spans the entire development lifecycle, with a current focus on LLMs, RAG pipelines, and semantic search. I’m passionate about leading cross-functional teams and helping organizations navigate the practical side of AI adoption.
