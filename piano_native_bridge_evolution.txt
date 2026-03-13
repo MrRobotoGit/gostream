@@ -1,0 +1,272 @@
+================================================================================
+PIANO: UNIFICAZIONE PROFONDA NATIVE BRIDGE (gostream <-> gostorm)
+================================================================================
+
+CONTESTO
+--------
+
+Il Native Bridge attuale (native_bridge.go) comunica con GoStorm SIMULANDO
+RICHIESTE HTTP: NativeReader.startStream() costruisce un http.Request finto con
+header "Range:", lo passa a t.Stream() che internamente usa http.ServeContent(),
+il quale scrive su un PipeResponseWriter (shim HTTP->pipe), e la pump legge
+dall'altro capo della pipe.
+
+Questo significa che ogni stream ha:
+  - 1 goroutine persistente per stream (quella che esegue t.Stream())
+  - 2 pipe (reader + writer)
+  - 1 context con cancel
+  - Header HTTP costruiti e mai usati da nessun vero client HTTP
+
+FetchBlock e' ancora peggio: 2 goroutine (stream + context-drain), 2 pipe,
+1 context -- per leggere un singolo blocco di bytes.
+
+L'OBIETTIVO: eliminare lo shim HTTP nel percorso nativo, facendo comunicare
+gostream e gostorm tramite interfacce Go dirette (io.ReadSeeker), mantenendo
+invariato il percorso HTTP reale (per DLNA, Plex, Samba).
+
+
+================================================================================
+DESIGN DELLA SOLUZIONE
+================================================================================
+
+1. NUOVO METODO IN GOSTORM: Torrent.OpenFile()
+----------------------------------------------
+
+File: internal/gostorm/torr/torrent.go
+
+Espone il torrstor.Reader direttamente, bypassando http.ServeContent.
+Riusa i metodi gia' esistenti t.NewReader(), t.CloseReader(), torrstor.IsResponsive().
+
+// OpenFile opens a direct cache reader for the given file ID.
+// Returns the reader and file size. Caller must call CloseReader when done.
+func (t *Torrent) OpenFile(fileID int) (*torrstor.Reader, int64, error) {
+    if !t.GotInfo() {
+        return nil, 0, fmt.Errorf("torrent info not ready")
+    }
+    st := t.Status()
+    var stFile *state.TorrentFileStat
+    for _, f := range st.FileStats {
+        if f.Id == fileID { stFile = f; break }
+    }
+    if stFile == nil {
+        return nil, 0, fmt.Errorf("file %d not found", fileID)
+    }
+    files := t.Files()
+    var file *torrent.File
+    for _, tfile := range files {
+        if tfile.Path() == stFile.Path { file = tfile; break }
+    }
+    if file == nil {
+        return nil, 0, fmt.Errorf("file %d path not found", fileID)
+    }
+    reader := t.NewReader(file)
+    if reader == nil {
+        return nil, 0, fmt.Errorf("cannot create reader")
+    }
+    if torrstor.IsResponsive() {
+        reader.SetResponsive()
+    }
+    return reader, file.Length(), nil
+}
+
+
+--------------------------------------------------------------------------------
+2. NativeReader: DA PIPE+GOROUTINE A LETTORE DIRETTO
+--------------------------------------------------------------------------------
+
+File: native_bridge.go
+
+PRIMA (pipe-based):
+  NativeReader { pipeReader, pipeWriter, cancelFunc }
+  startStream(off) -> goroutine -> t.Stream() -> http.ServeContent()
+                   -> PipeResponseWriter -> pipe
+  ReadAt()         -> io.ReadFull(pipeReader, p)
+  Interrupt()      -> pipeReader.Close()   // unblock ReadFull
+
+DOPO (direct reader):
+  NativeReader { reader *torrstor.Reader, torrent *torr.Torrent }
+  openReader(off)  -> t.OpenFile(fileID) + reader.Seek(off)
+  ReadAt()         -> reader.Read(p)       // diretto, nessuna goroutine extra
+  Interrupt()      -> reader.Close()       // goroutine-safe, sblocca Read() in corso
+
+Struct aggiornata:
+
+  type NativeReader struct {
+      mu           sync.Mutex
+      hash         string
+      fileID       int
+      offset       int64
+      reader       *torrstor.Reader   // NUOVO: lettore diretto
+      torrent      *torr.Torrent      // NUOVO: per chiusura
+      closed       bool
+      lastActivity time.Time
+      interrupted  atomic.Bool
+  }
+
+ReadAt() -- Smart Seek diventa Seek reale (non piu' drain del pipe):
+
+  // 2. Smart Seek: seek diretto invece di scartare bytes dalla pipe
+  if r.reader != nil && off > r.offset && off-r.offset < 2*1024*1024 {
+      if _, err := r.reader.Seek(off, io.SeekStart); err == nil {
+          r.offset = off
+          n, err = r.reader.Read(p)
+          // ...
+      }
+  }
+
+Interrupt() -- chiude il reader direttamente:
+
+  func (r *NativeReader) Interrupt() {
+      r.interrupted.Store(true)
+      r.mu.Lock()
+      reader := r.reader
+      r.mu.Unlock()
+      if reader != nil {
+          reader.Close() // goroutine-safe: sblocca reader.Read() in corso
+      }
+  }
+
+Hard Seek = closeReader() + openReader():
+
+  func (r *NativeReader) openReader(off int64) error {
+      t := torr.PeekTorrent(r.hash)
+      if t == nil || t.Torrent == nil {
+          return fmt.Errorf("torrent not found")
+      }
+      reader, _, err := t.OpenFile(r.fileID)
+      if err != nil { return err }
+      if off > 0 {
+          if _, err := reader.Seek(off, io.SeekStart); err != nil {
+              t.CloseReader(reader)
+              return err
+          }
+      }
+      r.reader = reader
+      r.torrent = t
+      r.offset = off
+      return nil
+  }
+
+  func (r *NativeReader) closeReader() {
+      if r.reader != nil {
+          r.torrent.CloseReader(r.reader)
+          r.reader = nil
+          r.torrent = nil
+      }
+  }
+
+
+--------------------------------------------------------------------------------
+3. FetchBlock: DA 2 GOROUTINE A 1
+--------------------------------------------------------------------------------
+
+PRIMA: goroutine(t.Stream) + goroutine(context-drain) + pipe + PipeResponseWriter
+DOPO:  goroutine(read con timeout) + reader diretto
+
+  func (c *NativeClient) FetchBlock(hash string, fileID int,
+      offset int64, p []byte) (int, error) {
+
+      t := torr.PeekTorrent(hash)
+      if t == nil || t.Torrent == nil {
+          return 0, fmt.Errorf("torrent not found")
+      }
+      reader, _, err := t.OpenFile(fileID)
+      if err != nil { return 0, err }
+      defer t.CloseReader(reader)
+
+      if offset > 0 {
+          if _, err := reader.Seek(offset, io.SeekStart); err != nil {
+              return 0, err
+          }
+      }
+
+      ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+      defer cancel()
+
+      type result struct { n int; err error }
+      ch := make(chan result, 1)
+      go func() {
+          n, err := io.ReadFull(reader, p)
+          ch <- result{n, err}
+      }()
+
+      select {
+      case res := <-ch:
+          if res.err == io.ErrUnexpectedEOF { return res.n, nil }
+          return res.n, res.err
+      case <-ctx.Done():
+          reader.Close()   // sblocca la goroutine bloccata
+          res := <-ch      // attendi cleanup
+          _ = res
+          return 0, fmt.Errorf("FetchBlock timeout (8s) at offset %d", offset)
+      }
+  }
+
+
+--------------------------------------------------------------------------------
+4. RIMOZIONE DI PipeResponseWriter
+--------------------------------------------------------------------------------
+
+PipeResponseWriter diventa inutilizzata nel percorso nativo e puo' essere rimossa
+da native_bridge.go.
+Il percorso HTTP reale (stream.go) continua ad usare http.ResponseWriter nativo
+-- nessuna modifica necessaria.
+
+
+================================================================================
+FILE DA MODIFICARE
+================================================================================
+
+  internal/gostorm/torr/torrent.go
+      Aggiunge: OpenFile(fileID int) (*torrstor.Reader, int64, error)
+
+  native_bridge.go
+      Refactoring: NativeReader (elimina pipe+goroutine)
+      Refactoring: FetchBlock (1 goroutine invece di 2)
+      Rimozione:   PipeResponseWriter
+
+INVARIATI (nessuna modifica):
+  stream.go, main.go (pump, semaphore, MkvHandle), apihelper.go, btserver.go
+
+
+================================================================================
+BENEFICI ATTESI
+================================================================================
+
+  Goroutine per stream attivo      : 1 persistente  -->  0
+  Goroutine per FetchBlock         : 2               -->  1
+  Pipe per stream                  : 2 (r+w)         -->  0
+  Smart Seek                       : discard N bytes  -->  reader.Seek() O(1)
+  Hard Seek                        : kill+new goroutine --> closeReader+openReader
+  Astrazione HTTP percorso nativo  : PipeResponseWriter+http.Request finti --> zero
+  Pressione GC (Pi 4)              : alloca pipe+goroutine ogni Hard Seek --> solo Reader
+
+
+================================================================================
+PIANO DI VERIFICA
+================================================================================
+
+  1. Build         : go build ./...                       (nessun errore)
+  2. Test          : go test ./internal/gostorm/...       (nessuna regressione)
+  3. Smoke manuale :
+       - Aprire file .mkv via FUSE -> playback continuo funziona
+       - Seek rapido nel player -> nessun blocco, ripresa corretta
+       - Piu' file aperti contemporaneamente -> semaphore funziona
+  4. Log check     : [NativeReader] hard seek mostra "openReader" non "startStream"
+  5. Goroutine     : runtime.NumGoroutine() durante streaming ~25 inferiore
+
+
+================================================================================
+NOTA SU io.Pipe
+================================================================================
+
+io.Pipe e' gia' in-memory (zero rete), quindi la latenza singola lettura e'
+bassa. Il guadagno principale non e' la velocita' del singolo byte ma:
+
+  a) Eliminazione delle goroutine persistenti per stream (footprint su Pi 4)
+  b) Smart Seek da O(N) a O(1): oggi il bridge scarta fisicamente N bytes
+     dalla pipe; con il reader diretto e' un seek istantaneo sul torrstor.Reader
+  c) FetchBlock: 2 goroutine -> 1 (accessi random multipli e scan metadati)
+  d) Pulizia del codice: nessun http.Request finto, nessun PipeResponseWriter
+
+================================================================================
