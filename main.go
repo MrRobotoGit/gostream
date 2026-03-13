@@ -1130,7 +1130,16 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			atomic.StoreInt64(&h.lastOff, resumeOffset)
 		}
 
+		// Cold start look-ahead: if pump would start at 0 (no prior cache),
+		// begin 1 chunk ahead so FetchBlock serves 0-16MB while pump downloads 16-32MB.
+		// Eliminates the pump/player synchronization at offset 0 that causes cold start stutter.
 		pumpStart := resumeOffset
+		if pumpStart == 0 {
+			pumpStart = int64(globalConfig.ReadAheadBase)
+			if pumpStart == 0 {
+				pumpStart = 16 * 1024 * 1024
+			}
+		}
 		capturedState := sharedState
 		safeGo(func() {
 			h.nativePump(pumpCtx, pumpStart, capturedState)
