@@ -1078,12 +1078,12 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 				}
 			}
 
-			if diskOffset > 16*1024*1024 {
-				safetyMargin := int64(16 * 1024 * 1024)
+			if diskOffset > 32*1024*1024 {
+				safetyMargin := int64(32 * 1024 * 1024) // V294: Increased from 16MB to 32MB for smoother 4K transition
 				skipOffset := diskOffset - safetyMargin
 				if skipOffset > resumeOffset {
 					resumeOffset = skipOffset
-					logger.Printf("[DiskWarmup] PUMP SKIP: Starting from %.1fMB (Disk: %.1fMB, Margin: 16MB)",
+					logger.Printf("[DiskWarmup] PUMP SKIP: Starting from %.1fMB (Disk: %.1fMB, Margin: 32MB)",
 						float64(resumeOffset)/(1<<20), float64(diskOffset)/(1<<20))
 				}
 			}
@@ -1135,13 +1135,14 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		}
 
 		// Cold start look-ahead: if pump would start at 0 (no prior cache),
-		// begin 1 chunk ahead so FetchBlock serves 0-16MB while pump downloads 16-32MB.
+		// begin 2 chunks ahead so FetchBlock serves 0-32MB while pump downloads 32-48MB.
 		// Eliminates the pump/player synchronization at offset 0 that causes cold start stutter.
 		pumpStart := resumeOffset
 		if pumpStart == 0 {
-			pumpStart = int64(globalConfig.ReadAheadBase)
+			headStartChunks := int64(2) // V294: Increased from 1 to 2 for smoother 4K start
+			pumpStart = headStartChunks * int64(globalConfig.ReadAheadBase)
 			if pumpStart == 0 {
-				pumpStart = 16 * 1024 * 1024
+				pumpStart = 32 * 1024 * 1024
 			}
 		}
 		capturedState := sharedState
