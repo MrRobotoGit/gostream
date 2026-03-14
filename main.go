@@ -920,6 +920,17 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		h.hash = finalHash
 		h.fileID = fileIdx
 		// V310: pump starts lazily on first real Read() to anchor to player position
+
+		// Fix 1: Early pump start (Warmup Boost)
+		// If we have warmup data, we can safely start the pump immediately because
+		// the player is guaranteed to start at offset 0 (serving from SSD).
+		// This gives the pump ~500ms head start to skip V303 and reach 64MB.
+		if hasWarmup {
+			h.pumpOff = 0 // Player starts at 0, anchor pump there
+			go h.pumpOnce.Do(func() {
+				h.startNativePump(finalHash, fileIdx)
+			})
+		}
 	}
 
 	// V182: Register for cleanup
@@ -1079,12 +1090,26 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			}
 
 			if diskOffset > 32*1024*1024 {
-				safetyMargin := int64(32 * 1024 * 1024) // V294: Increased from 16MB to 32MB for smoother 4K transition
-				skipOffset := diskOffset - safetyMargin
-				if skipOffset > resumeOffset {
-					resumeOffset = skipOffset
-					logger.Printf("[DiskWarmup] PUMP SKIP: Starting from %.1fMB (Disk: %.1fMB, Margin: 32MB)",
-						float64(resumeOffset)/(1<<20), float64(diskOffset)/(1<<20))
+				// Fix 2: Precision Landing (Avoid V303 loop)
+				// If warmup is confirmed active (hasWarmup=true) and we are past the boundary,
+				// we can jump EXACTLY to the boundary without safety margins.
+				if h.hasWarmup && diskOffset >= warmupFileSize {
+					// V311: 8MB Safety Overlap. Atterriamo 8MB prima della frontiera per dare tempo
+					// al motore torrent di validare il pezzo di transizione mentre il player legge ancora da SSD.
+					safetyOverlap := int64(8 * 1024 * 1024)
+					if warmupFileSize-safetyOverlap > resumeOffset {
+						resumeOffset = warmupFileSize - safetyOverlap
+						logger.Printf("[DiskWarmup] PUMP DIRECT: Starting at %.1fMB (8MB overlap safety)",
+							float64(resumeOffset)/(1<<20))
+					}
+				} else {
+					safetyMargin := int64(32 * 1024 * 1024) // V294: Increased from 16MB to 32MB for smoother 4K transition
+					skipOffset := diskOffset - safetyMargin
+					if skipOffset > resumeOffset {
+						resumeOffset = skipOffset
+						logger.Printf("[DiskWarmup] PUMP SKIP: Starting from %.1fMB (Disk: %.1fMB, Margin: 32MB)",
+							float64(resumeOffset)/(1<<20), float64(diskOffset)/(1<<20))
+					}
 				}
 			}
 		}
@@ -1507,6 +1532,50 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			timing.BytesRead = n
 			if off == 0 {
 				logger.Printf("[DiskWarmup] HIT %s off=0 (%dKB)", filepath.Base(h.path), n/1024)
+			}
+
+			// Fix 3: Warmup Boundary Pre-fetch
+			// If we are reading the last chunk of the warmup zone, triggering a pre-fetch for
+			// the first non-warmup chunk (64MB) saves us from the "Pump Start Gap".
+			chunkSize := int64(globalConfig.ReadAheadBase)
+			if chunkSize == 0 {
+				chunkSize = 16 * 1024 * 1024
+			}
+			nearBoundary := off+int64(n) >= warmupFileSize-chunkSize && off+int64(n) <= warmupFileSize
+
+			if nearBoundary && !raCache.Exists(h.path, warmupFileSize) {
+				prefetchKey := fmt.Sprintf("%s:wb", h.path) // wb = warmup boundary
+				if _, loaded := inFlightPrefetches.LoadOrStore(prefetchKey, true); !loaded {
+					goHash, goFileID, goPath, goSize := h.hash, h.fileID, h.path, h.size
+					safeGo(func() {
+						defer inFlightPrefetches.Delete(prefetchKey)
+						// Quick check: don't block for long
+						select {
+						case masterDataSemaphore <- struct{}{}:
+							defer func() { <-masterDataSemaphore }()
+						case <-time.After(200 * time.Millisecond):
+							return
+						}
+
+						bufPtr := readBufferPool.Get().(*[]byte)
+						defer readBufferPool.Put(bufPtr)
+
+						limit := int64(len(*bufPtr))
+						if goSize-warmupFileSize < limit {
+							limit = goSize - warmupFileSize
+						}
+						if limit <= 0 {
+							return
+						}
+
+						nf, err := nativeBridge.FetchBlock(goHash, goFileID, warmupFileSize, (*bufPtr)[:limit])
+						if err == nil && nf > 0 {
+							raCache.Put(goPath, warmupFileSize, warmupFileSize+int64(nf)-1, (*bufPtr)[:nf])
+							logger.Printf("[WarmupBoundary] Pre-fetched %.1fKB at %.1fMB",
+								float64(nf)/1024, float64(warmupFileSize)/(1<<20))
+						}
+					})
+				}
 			}
 
 			// V570: Restore lastOff for Head Warmup to keep pump in sync during start.

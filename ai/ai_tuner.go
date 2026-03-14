@@ -70,19 +70,19 @@ func resetLlamaCache(aiURL string) {
 }
 
 func (t *AITweak) Sanitize() {
-	if t.ConnectionsLimit < 10 {
-		t.ConnectionsLimit = 10
+	if t.ConnectionsLimit < 5 {
+		t.ConnectionsLimit = 5
 	}
 	if t.ConnectionsLimit > 60 {
 		t.ConnectionsLimit = 60
 	}
-	if t.PeerTimeout < 10 {
-		t.PeerTimeout = 10
+	if t.PeerTimeout < 15 {
+		t.PeerTimeout = 15
 	}
 }
 
 func crisisActive() bool {
-	return getAverage(torrentSpeedAvg) < 3.0 && len(torrentSpeedAvg) > 10
+	return getAverage(torrentSpeedAvg) < 2.0 && len(torrentSpeedAvg) > 8
 }
 
 func getAverage(samples []float64) float64 {
@@ -300,14 +300,16 @@ func runTuningCycle(aiURL string) {
 	// Re-zero peak for next 3m cycle
 	peakCPUCycle = 0
 
-	// Qwen3 ChatML template
-	historyPrefix := ""
-	if len(metricsHistory) > 0 {
-		historyPrefix = "history=" + historyStr + " "
-	}
+	// Qwen3 ChatML template con Few-Shot Examples (Full Data)
 	prompt := fmt.Sprintf(
-		"<|im_start|>system\nTune BitTorrent parms for stability 4K Movie streaming. Evaluation: If the swarm is small (Peers < 20) or Speed is dropping, prioritize Peer Retention by significantly increasing peer_timeout_seconds. connections_limit MUST be less than Peers. Output JSON: {\"connections_limit\":N,\"peer_timeout_seconds\":M}<|im_end|>\n<|im_start|>user\nActive peers in swarm:%d, file size:%.1fGB - %sspeed=%.0fMB/s cpu=%d%% buf=%d%% peers=%d trend=%s<|im_end|>\n<|im_start|>assistant\n",
-		activeStats.TotalPeers, fileSizeGB, historyPrefix, currSpeedMBs, int(currentCPU), buffer, activeStats.ActivePeers, speedTrendStr,
+		"<|im_start|>system\nBitTorrent Optimizer. Examples:\n" +
+		"- Peers:2, Total:10, Size:2GB, Speed:0, CPU:25 -> {\"connections_limit\":5,\"peer_timeout_seconds\":90}\n" +
+		"- Peers:50, Total:150, Size:40GB, Speed:15, CPU:30 -> {\"connections_limit\":50,\"peer_timeout_seconds\":15}\n" +
+		"- Peers:40, Total:80, Size:15GB, Speed:10, CPU:90 -> {\"connections_limit\":12,\"peer_timeout_seconds\":20}\n" +
+		"Output ONLY JSON.<|im_end|>\n" +
+		"<|im_start|>user\nPeers:%d, Total:%d, Size:%.1fGB, Speed:%.1fMB/s, CPU:%d%%, Buf:%d%%, History:%s, Trend:%s<|im_end|>\n" +
+		"<|im_start|>assistant\n",
+		activeStats.ActivePeers, activeStats.TotalPeers, fileSizeGB, currSpeedMBs, int(currentCPU), buffer, historyStr, speedTrendStr,
 	)
 
 	tweak, err := fetchAIJSON[AITweak](aiURL, prompt)
@@ -368,7 +370,7 @@ func fetchAIJSON[T any](url string, prompt string) (*T, error) {
 	start := time.Now()
 
 	grammar := `root ::= "{\"connections_limit\":" number ",\"peer_timeout_seconds\":" number "}"
-number ::= [1-9] [0-9]?`
+number ::= [0-9]+`
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"prompt":       prompt,
