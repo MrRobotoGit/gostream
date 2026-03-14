@@ -92,8 +92,13 @@ func (p *MemPiece) Release() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.buffer != nil {
-		// V96: Put the buffer back into the pool for future reuse
-		memBufferPool.Put(p.buffer)
+		// V292-Fix: Race Condition with Hash Verifier.
+		// We CANNOT return the buffer to the pool here because anacrolix/torrent might still
+		// be reading it for hash verification (in a separate goroutine).
+		// If we put it back, another WriteAt() could grab it and overwrite data *while* it's being hashed,
+		// causing "Corrupt Piece" errors and AdaptiveShield bans.
+		// We let the GC handle the lifecycle of this buffer naturally.
+		// memBufferPool.Put(p.buffer) <--- DISABLED
 		p.buffer = nil
 	}
 	p.piece.Size = 0

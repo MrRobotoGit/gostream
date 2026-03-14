@@ -911,6 +911,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		path:             n.vMeta.Path,
 		lastTime:         now,
 		lastOff:          -1,
+		pumpOff:          -1,  // Nuova variabile per il Pump Steering
 		lastActivityTime: now,       // Initialize activity tracking
 		hasWarmup:        hasWarmup, // V272: Scanner-aware retention
 	}
@@ -930,7 +931,8 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 type MkvHandle struct {
 	url, path        string
 	size             int64
-	lastOff          int64 // V226: Atomic tracking for pump sync
+	lastOff          int64 // V226: Atomic tracking for sequence detection
+	pumpOff          int64 // Traccia la posizione ufficiale per il Pump (ignora i probe)
 	lastLen          int
 	lastTime         time.Time
 	lastActivityTime time.Time // FASE 2.3: Idle Grace Reset
@@ -996,6 +998,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		// interrupts caused by Plex/Samba handle cycling during normal playback.
 		if curPos := atomic.LoadInt64(&ps.playerOff); curPos > 0 {
 			atomic.StoreInt64(&h.lastOff, curPos)
+			atomic.StoreInt64(&h.pumpOff, curPos)
 		}
 		logger.Printf("[V264] Attached to existing pump (Refs: %d): %s", atomic.LoadInt32(&ps.refCount), filepath.Base(h.path))
 		pumpCreationMu.Unlock()
@@ -1025,6 +1028,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			// V701/V702: Same as above — inherit player position to prevent false V286
 			if curPos := atomic.LoadInt64(&ps.playerOff); curPos > 0 {
 				atomic.StoreInt64(&h.lastOff, curPos)
+				atomic.StoreInt64(&h.pumpOff, curPos)
 			}
 			pumpCreationMu.Unlock()
 			return
@@ -1074,12 +1078,12 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 				}
 			}
 
-			if diskOffset > 16*1024*1024 {
-				safetyMargin := int64(16 * 1024 * 1024)
+			if diskOffset > 32*1024*1024 {
+				safetyMargin := int64(32 * 1024 * 1024) // V294: Increased from 16MB to 32MB for smoother 4K transition
 				skipOffset := diskOffset - safetyMargin
 				if skipOffset > resumeOffset {
 					resumeOffset = skipOffset
-					logger.Printf("[DiskWarmup] PUMP SKIP: Starting from %.1fMB (Disk: %.1fMB, Margin: 16MB)",
+					logger.Printf("[DiskWarmup] PUMP SKIP: Starting from %.1fMB (Disk: %.1fMB, Margin: 32MB)",
 						float64(resumeOffset)/(1<<20), float64(diskOffset)/(1<<20))
 				}
 			}
@@ -1090,9 +1094,9 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		// (e.g. 1344MB for a 1417MB file). Subsequent pump restarts all start at 1344MB
 		// → immediate EOF → V238/V239 rapid loop. Fix: if resumeOffset is more than
 		// 2 chunks ahead of the player, start the pump at the player's position instead.
-		// V700b: Also handle new handles (lastOff=-1): MaxCachedOffset may be stale from
+		// V700b: Also handle new handles (pumpOff=-1): MaxCachedOffset may be stale from
 		// a previous session (same path re-opened). Player hasn't read yet → start from 0.
-		if playerOff := atomic.LoadInt64(&h.lastOff); playerOff > 0 {
+		if playerOff := atomic.LoadInt64(&h.pumpOff); playerOff > 0 {
 			chunkSize := int64(globalConfig.ReadAheadBase)
 			if chunkSize == 0 {
 				chunkSize = 16 * 1024 * 1024
@@ -1118,7 +1122,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			if chunkSize == 0 {
 				chunkSize = 16 * 1024 * 1024
 			}
-			if raV310 := atomic.LoadInt64(&h.lastOff); raV310 > 0 && resumeOffset+chunkSize < raV310 {
+			if raV310 := atomic.LoadInt64(&h.pumpOff); raV310 > 0 && resumeOffset+chunkSize < raV310 {
 				pumpStartV310 := (raV310 / chunkSize) * chunkSize
 				logger.Printf("[V310] Resume anchor: pump start → %dMB (player at %dMB)",
 					pumpStartV310/(1024*1024), raV310/(1024*1024))
@@ -1127,10 +1131,20 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		}
 
 		if resumeOffset > 0 {
-			atomic.StoreInt64(&h.lastOff, resumeOffset)
+			atomic.StoreInt64(&h.pumpOff, resumeOffset)
 		}
 
+		// Cold start look-ahead: if pump would start at 0 (no prior cache),
+		// begin 2 chunks ahead so FetchBlock serves 0-32MB while pump downloads 32-48MB.
+		// Eliminates the pump/player synchronization at offset 0 that causes cold start stutter.
 		pumpStart := resumeOffset
+		if pumpStart == 0 {
+			headStartChunks := int64(2) // V294: Increased from 1 to 2 for smoother 4K start
+			pumpStart = headStartChunks * int64(globalConfig.ReadAheadBase)
+			if pumpStart == 0 {
+				pumpStart = 32 * 1024 * 1024
+			}
+		}
 		capturedState := sharedState
 		safeGo(func() {
 			h.nativePump(pumpCtx, pumpStart, capturedState)
@@ -1205,12 +1219,12 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 
 		// V239: Release-on-Idle Logic
 		// If the player hasn't requested data, yield the slot based on health status.
-		// V262: Intelligent Timeout - confirmed playback gets 2 hours, background scans get 45s.
+		// V262: Intelligent Timeout - confirmed playback gets 2 hours, background scans get 60s.
 		h.mu.Lock()
 		lastAct := h.lastActivityTime
 		h.mu.Unlock()
 
-		timeoutLimit := 45 * time.Second
+		timeoutLimit := 1 * time.Minute
 		if val, ok := playbackRegistry.Load(h.path); ok {
 			if ps, ok := val.(*PlaybackState); ok && ps.GetStatus() {
 				timeoutLimit = 2 * time.Hour
@@ -1222,26 +1236,32 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 			return
 		}
 
-		// V260: Advanced Player Sync - Find the most advanced player position among all handles
-		playerOff := int64(0)
+		// V260: Advanced Player Sync - Find the player position of the most recently active handle.
+		// This is the most reliable way to identify the "real" player in a multi-handle environment.
+		playerOff := int64(-1)
+		var lastActivity time.Time
 		activeHandles.Range(func(key, value interface{}) bool {
 			handle := key.(*MkvHandle)
 			if handle.path == h.path {
-				off := atomic.LoadInt64(&handle.lastOff)
-				if off > playerOff {
+				// Use pumpOff, which ignores metadata probes, to drive pump decisions
+				off := atomic.LoadInt64(&handle.pumpOff)
+				handle.mu.Lock()
+				activity := handle.lastActivityTime
+				handle.mu.Unlock()
+
+				if off >= 0 && (playerOff == -1 || activity.After(lastActivity)) {
 					playerOff = off
+					lastActivity = activity
 				}
 			}
 			return true
 		})
 
-		// V284: Reactive Jump — if player has seeked more than ReadAheadBudget ahead of the
-		// pump, snap the pump to (playerOff / chunkSize) * chunkSize so anacrolix
-		// prioritises the new pieces exactly where the player is.
+		// V284: Bidirectional Reactive Jump — if player position is far from pump offset,
+		// snap the pump to the player's position (both forward and backward).
 		jumpThreshold := int64(globalConfig.ReadAheadBudget)
-		if playerOff > offset+jumpThreshold {
+		if playerOff >= 0 && (playerOff > offset+jumpThreshold || (offset > playerOff+jumpThreshold && offset > 0)) {
 			// V284-Fix: Align perfectly to the nearest chunk boundary.
-			// Never step back a full chunkSize arbitrarily (Audit finding).
 			jumpTo := (playerOff / chunkSize) * chunkSize
 			if jumpTo < 0 {
 				jumpTo = 0
@@ -1278,7 +1298,31 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 				time.Sleep(200 * time.Millisecond)
 				continue
 			}
-			return // genuine EOF
+			// Genuine EOF. If confirmed playback, wait for a seek instead of dying
+			// and triggering an immediate V238 re-upgrade (tight V238/V239 loop).
+			// Common case: Plex resumes from near end-of-file (last saved position).
+			isConfirmedEOF := false
+			if val, ok := playbackRegistry.Load(h.path); ok {
+				if ps, ok := val.(*PlaybackState); ok && ps.GetStatus() {
+					isConfirmedEOF = true
+				}
+			}
+			if isConfirmedEOF {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(3 * time.Second):
+				}
+				// If player has seeked away from EOF, resume from new position
+				newPlayerOff := atomic.LoadInt64(&h.pumpOff)
+				if newPlayerOff > 0 && newPlayerOff < h.size-chunkSize {
+					offset = (newPlayerOff / chunkSize) * chunkSize
+					logger.Printf("[V239-Hold] EOF wait: player seeked to %dMB, resuming pump", offset/(1024*1024))
+					continue
+				}
+				continue // still at EOF, keep waiting (activity timeout handles eventual exit)
+			}
+			return // genuine EOF, unconfirmed playback
 		}
 
 		pumpedBytes += (nextOffset - offset)
@@ -1421,48 +1465,35 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 	h.mu.Unlock()
 
-	// V285: Eager lastOff update so pump sees seek target immediately
-	// V570: Only streaming reads steer the pump (SSD reads are handled above)
-	prevOff := atomic.LoadInt64(&h.lastOff)
+	// V285-V310 Refinement: Calculate state early for intelligent pump anchoring.
+	isTailRead := h.size > 16*1024*1024 && off >= h.size-16*1024*1024
+	isSeq := (off == h.lastOff+int64(h.lastLen)) || (h.lastOff >= 0 && abs(off-(h.lastOff+int64(h.lastLen))) <= globalConfig.SequentialTolerance)
+	isStreaming := (len(dest) >= int(globalConfig.StreamingThreshold)) || isSeq
+
+	// lastOff tracks EVERY read, pumpOff tracks only streaming reads.
 	atomic.StoreInt64(&h.lastOff, off)
+	
+	// Read current pump target for jump calculations
+	pumpTarget := atomic.LoadInt64(&h.pumpOff)
 
-	// V560: Detect pre-confirmation tail probe to suppress V286 interrupt.
-	// V560-Dynamic: Threshold is 5% of file size, capped between 64MB and 2GB.
-	// This covers "far" metadata probes in large Remux files (e.g. The Long Walk).
-	dynamicThreshold := h.size / 20 // 5%
-	if dynamicThreshold < 64*1024*1024 {
-		dynamicThreshold = 64 * 1024 * 1024
-	}
-	if dynamicThreshold > 2*1024*1024*1024 {
-		dynamicThreshold = 2 * 1024 * 1024 * 1024
-	}
-
-	isTailProbe := false
-	if h.hash != "" && h.size > dynamicThreshold && off >= h.size-dynamicThreshold {
-		if val, ok := playbackRegistry.Load(h.path); ok {
-			ps := val.(*PlaybackState)
-			ps.mu.RLock()
-			isTailProbe = ps.ConfirmedAt.IsZero()
-			ps.mu.RUnlock()
-		} else {
-			isTailProbe = true // no registry entry = unconfirmed discovery phase
+	// V286: Seek-Aware Interrupt. 
+	budget := int64(globalConfig.ReadAheadBudget)
+	if h.nativeReader != nil && !isTailRead && (off > pumpTarget+budget || (pumpTarget > off+budget && pumpTarget > 0)) {
+		if isStreaming {
+			h.nativeReader.Interrupt()
+			torrstor.ResetShield()
+			logger.Printf("[V286] Interrupt pump for seek: %dMB → %dMB",
+				pumpTarget/(1024*1024), off/(1024*1024))
 		}
 	}
 
-	// V286: Seek-Aware Interrupt. If player jumped far, wake up the pump immediately.
-	// V560: Skip for pre-confirmation tail reads — served by SSD, pump must not be interrupted.
-	budget := int64(globalConfig.ReadAheadBudget)
-	if h.nativeReader != nil && !isTailProbe && (off > prevOff+budget || (prevOff > off+budget && prevOff > 0)) {
-		h.nativeReader.Interrupt()
-		torrstor.ResetShield()
-		logger.Printf("[V286] Interrupt pump for seek+shield reset: %dMB → %dMB",
-			prevOff/(1024*1024), off/(1024*1024))
-	}
-
-	// V310: Lazy pump start — fires once on first non-tail Read(), with lastOff already
-	// set to the player's actual position (used as resume anchor in startNativePump).
-	if h.hash != "" && !isTailProbe {
+	// V310: Lazy pump start — never anchor to tail probes.
+	if h.hash != "" {
 		h.pumpOnce.Do(func() {
+			// Only anchor pumpOff if this is a "real" streaming read or near start.
+			if !isTailRead && (isStreaming || off < 64*1024*1024) {
+				atomic.StoreInt64(&h.pumpOff, off)
+			}
 			h.startNativePump(h.hash, h.fileID)
 		})
 	}
@@ -1490,37 +1521,39 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 
 	// V265: Tail warmup — serve last 16MB from SSD for MKV Cues/seek index.
-	// V560: Discovery-Only Tail Warmup. isTailProbe=true means off is in tail area AND
-	// ConfirmedAt.IsZero(). Post-confirmation tail reads fall through to the pump for fresh data.
-	if isTailProbe && diskWarmup != nil {
-		// V560-Fix: Tail reads must NOT steer the pump. Restore lastOff to prevOff so
-		// V284 doesn't jump the pump to the cold end-of-file on the next tick.
-		atomic.StoreInt64(&h.lastOff, prevOff)
-		n, _ := diskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
-		if n > 0 {
-			timing.UsedCache = true
-			timing.BytesRead = n
-			h.mu.Lock()
-			h.lastLen, h.lastTime = n, now
-			h.mu.Unlock()
-			return fuse.ReadResultData(dest[:n]), 0
+	if isTailRead && diskWarmup != nil {
+		isConfirmed := false
+		if val, ok := playbackRegistry.Load(h.path); ok {
+			ps := val.(*PlaybackState)
+			ps.mu.RLock()
+			isConfirmed = !ps.ConfirmedAt.IsZero()
+			ps.mu.RUnlock()
 		}
 
-		// V560-Optimization: If SSD tail miss during probe, use stateless FetchBlock
-		// to keep the head pump alive. Discovery is non-critical, safety first.
-		nFetch, err := nativeBridge.FetchBlock(h.hash, h.fileID, off, dest)
-		if err == nil && nFetch > 0 {
-			// V1.4.0-Fix: Save captured tail data to SSD for next time
-			if diskWarmup != nil {
-				diskWarmup.WriteTail(h.hash, h.fileID, dest[:nFetch], off, h.size)
+		if !isConfirmed {
+			n, _ := diskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
+			if n > 0 {
+				timing.UsedCache = true
+				timing.BytesRead = n
+				h.mu.Lock()
+				h.lastLen, h.lastTime = n, now
+				h.mu.Unlock()
+				return fuse.ReadResultData(dest[:n]), 0
 			}
 
-			timing.UsedCache = false
-			timing.BytesRead = nFetch
-			h.mu.Lock()
-			h.lastLen, h.lastTime = nFetch, now
-			h.mu.Unlock()
-			return fuse.ReadResultData(dest[:nFetch]), 0
+			// V560-Optimization: If SSD tail miss during probe, use stateless FetchBlock
+			// to keep the head pump alive. Discovery is non-critical, safety first.
+			nFetch, err := nativeBridge.FetchBlock(h.hash, h.fileID, off, dest)
+			if err == nil && nFetch > 0 {
+				// V1.4.0-Fix: Save captured tail data to SSD for next time
+				diskWarmup.WriteTail(h.hash, h.fileID, dest[:nFetch], off, h.size)
+				timing.UsedCache = false
+				timing.BytesRead = nFetch
+				h.mu.Lock()
+				h.lastLen, h.lastTime = nFetch, now
+				h.mu.Unlock()
+				return fuse.ReadResultData(dest[:nFetch]), 0
+			}
 		}
 	}
 	end := off + int64(len(dest)) - 1
@@ -1593,8 +1626,6 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 
 	target := int(end - off + 1)
-	isSeq := (off == h.lastOff+int64(h.lastLen)) || (h.lastOff >= 0 && abs(off-(h.lastOff+int64(h.lastLen))) <= globalConfig.SequentialTolerance)
-	isStreaming := (len(dest) >= int(globalConfig.StreamingThreshold)) || isSeq
 	timing.IsStreaming = isStreaming
 
 	fetchEnd := end
@@ -1617,10 +1648,14 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		}
 		fetchSize = fetchEnd - off + 1
 	}
+	// V226/Dual-Offset: Steer the pump ONLY if this read is confirmed streaming/sequential AND not a tail probe.
+	if isStreaming && !isTailRead {
+		atomic.StoreInt64(&h.pumpOff, off)
+	}
+
 	h.mu.Lock()
 	h.lastLen, h.lastTime = len(dest), now
 	h.mu.Unlock()
-	atomic.StoreInt64(&h.lastOff, off)
 
 	// V226: Master Semaphore Management
 	// If the handle already has a persistent slot (Native WATCHING), we don't need to acquire another one.
@@ -1799,8 +1834,11 @@ DATA_READY:
 			}
 		}
 
-		// Update sequential detection state
-		atomic.StoreInt64(&h.lastOff, off)
+		// V226/Dual-Offset: Steer the pump ONLY if this read is confirmed streaming/sequential AND not a tail probe.
+		if isStreaming && !isTailRead {
+			atomic.StoreInt64(&h.pumpOff, off)
+		}
+		
 		h.mu.Lock()
 		h.lastLen = target
 		h.mu.Unlock()
@@ -1910,19 +1948,19 @@ DATA_READY:
 func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 	logger.Printf("=== RELEASE VIRTUAL === path=%s", h.path)
 
+	// V182: Remove from active handles IMMEDIATELY to prevent stale positions in V284 jumps.
+	activeHandles.Delete(h)
+	// V260: Only nil local reference. Pump owns reader lifecycle via captured copy.
+	h.nativeReader = nil
+
 	// V260: Shared Pump Reference Counting
 	if val, ok := activePumps.Load(h.path); ok {
 		ps := val.(*NativePumpState)
 		// V702: Persist the player's last read position into shared pump state.
-		// The next handle to attach (V701) will inherit this instead of the stale
-		// raCache high-water mark, preventing false V286 backward-seek interrupts.
 		if pos := atomic.LoadInt64(&h.lastOff); pos > 0 {
 			atomic.StoreInt64(&ps.playerOff, pos)
 		}
 		// V703: Only decrement refCount if this handle actually incremented it.
-		// Handles that didn't acquire a pump slot (h.hasSlot=false, e.g. probe/header
-		// reads) must not decrement — otherwise refCount goes negative and triggers
-		// spurious grace period timers.
 		if !h.hasSlot {
 			return 0
 		}
@@ -1955,12 +1993,6 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 			logger.Printf("[V420] Last handle closed: Shared Pump entering %s grace period for %s", graceDuration, filepath.Base(h.path))
 		}
 	}
-
-	// V260: Only nil local reference. Pump owns reader lifecycle via captured copy.
-	h.nativeReader = nil
-
-	// V182: Remove from active handles
-	activeHandles.Delete(h)
 
 	// V272: Fast-drop only for scanner/probe reads that were never confirmed by webhook
 	retentionDelay := 30 * time.Second

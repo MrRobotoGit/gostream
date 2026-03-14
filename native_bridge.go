@@ -184,7 +184,7 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 
 	// 1. Sequential Match
 	if r.reader != nil && off == r.offset {
-		n, err = r.reader.Read(p)
+		n, err = io.ReadFull(r.reader, p)
 		r.offset += int64(n)
 
 		if err == nil || err == io.EOF || err == io.ErrUnexpectedEOF {
@@ -205,7 +205,7 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 	if r.reader != nil && off > r.offset && off-r.offset < 2*1024*1024 {
 		if _, errSeek := r.reader.Seek(off, io.SeekStart); errSeek == nil {
 			r.offset = off
-			n, err = r.reader.Read(p)
+			n, err = io.ReadFull(r.reader, p)
 			r.offset += int64(n)
 			if err == nil || err == io.EOF || err == io.ErrUnexpectedEOF {
 				return n, nil
@@ -236,7 +236,7 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, err
 	}
 
-	n, err = r.reader.Read(p)
+	n, err = io.ReadFull(r.reader, p)
 	r.offset += int64(n)
 	if err == io.ErrUnexpectedEOF {
 		return n, nil

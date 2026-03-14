@@ -28,14 +28,14 @@ var defaultTimeout = 0
 var metricsHistory []string
 var CurrentLimit int32
 
-// Rolling buffers (300s window, 60 samples every 5s)
+// Rolling buffers (180s window, 36 samples every 5s)
 var torrentSpeedAvg []float64
 var cpuUsageAvg []float64
 var cycleCounter int
 var pulseCounter int
 var peakCPUCycle float64
 
-const normalCycle = 60 // 300s
+const normalCycle = 36 // 180s
 const crisisCycle = 12 // 60s
 
 // Keep-Alive client for llama.cpp local
@@ -119,7 +119,7 @@ func StartAITuner(ctx context.Context, aiURL string) {
 		defaultConns = lastConns
 		defaultTimeout = lastTimeout
 	}
-	log.Printf("[AI-Pilot] Neural optimizer starting... (Stats: 5s, AI: 300s) baseline conns=%d timeout=%d", lastConns, lastTimeout)
+	log.Printf("[AI-Pilot] Neural optimizer starting... (Stats: 5s, AI: 180s) baseline conns=%d timeout=%d", lastConns, lastTimeout)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -230,16 +230,16 @@ func runTuningCycle(aiURL string) {
 	}
 
 	torrentSpeedAvg = append(torrentSpeedAvg, currSpeedMBs)
-	if len(torrentSpeedAvg) > 60 {
+	if len(torrentSpeedAvg) > 36 {
 		torrentSpeedAvg = torrentSpeedAvg[1:]
 	}
 
 	cpuUsageAvg = append(cpuUsageAvg, currentCPU)
-	if len(cpuUsageAvg) > 60 {
+	if len(cpuUsageAvg) > 36 {
 		cpuUsageAvg = cpuUsageAvg[1:]
 	}
 
-	// AI CYCLE: adaptive — 300s normal, 60s in crisis (avg speed < 1MB/s)
+	// AI CYCLE: adaptive — 180s normal, 60s in crisis (avg speed < 1MB/s)
 	cycleCounter++
 	threshold := normalCycle
 	if crisisActive() {
@@ -250,12 +250,12 @@ func runTuningCycle(aiURL string) {
 	}
 	cycleCounter = 0
 
-	// --- SMART CONTEXT GENERATION (Every 5m) ---
+	// --- SMART CONTEXT GENERATION (Every 3m) ---
 	avgTorrentSpeed := getAverage(torrentSpeedAvg)
 	avgCPU := getAverage(cpuUsageAvg)
 
 	speedTrendStr := "STABLE"
-	if len(torrentSpeedAvg) >= 60 {
+	if len(torrentSpeedAvg) >= 36 {
 		diff := currSpeedMBs - torrentSpeedAvg[0]
 		if diff > 1.0 {
 			speedTrendStr = fmt.Sprintf("UP (+%.1fMB/s)", diff)
@@ -294,10 +294,10 @@ func runTuningCycle(aiURL string) {
 	fileSizeGB := float64(fSize) / (1024 * 1024 * 1024)
 
 	// Clean Context Format
-	contextStr := sanitizeStr(fmt.Sprintf("V:%.1fMB/s (AVG 5m: %.1fMB/s) | CPU:%d%% (Peak 5m: %d%%) | Peers:%d | Buffer:%d%%",
+	contextStr := sanitizeStr(fmt.Sprintf("V:%.1fMB/s (AVG 3m: %.1fMB/s) | CPU:%d%% (Peak 3m: %d%%) | Peers:%d | Buffer:%d%%",
 		currSpeedMBs, avgTorrentSpeed, int(currentCPU), int(peakCPUCycle), activeStats.ActivePeers, buffer))
 
-	// Re-zero peak for next 5m cycle
+	// Re-zero peak for next 3m cycle
 	peakCPUCycle = 0
 
 	// Qwen3 ChatML template
@@ -306,9 +306,10 @@ func runTuningCycle(aiURL string) {
 		historyPrefix = "history=" + historyStr + " "
 	}
 	prompt := fmt.Sprintf(
-		"<|im_start|>system\nTune BitTorrent parms for performance 4K Movie streaming. connections_limit MUST be between 10-60. Set peer_timeout_seconds according to the health of the swarm. Output JSON: {\"connections_limit\":N,\"peer_timeout_seconds\":M}<|im_end|>\n<|im_start|>user\nActive peers in swarm:%d, file size:%.1fGB - %sspeed=%.0fMB/s cpu=%d%% buf=%d%% peers=%d trend=%s<|im_end|>\n<|im_start|>assistant\n",
+		"<|im_start|>system\nTune BitTorrent parms for stability 4K Movie streaming. Evaluation: If the swarm is small (Peers < 20) or Speed is dropping, prioritize Peer Retention by significantly increasing peer_timeout_seconds. connections_limit MUST be less than Peers. Output JSON: {\"connections_limit\":N,\"peer_timeout_seconds\":M}<|im_end|>\n<|im_start|>user\nActive peers in swarm:%d, file size:%.1fGB - %sspeed=%.0fMB/s cpu=%d%% buf=%d%% peers=%d trend=%s<|im_end|>\n<|im_start|>assistant\n",
 		activeStats.TotalPeers, fileSizeGB, historyPrefix, currSpeedMBs, int(currentCPU), buffer, activeStats.ActivePeers, speedTrendStr,
 	)
+
 	tweak, err := fetchAIJSON[AITweak](aiURL, prompt)
 	if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
