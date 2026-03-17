@@ -54,6 +54,9 @@ func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter
 	st := t.Status()
 	var stFile *state.TorrentFileStat
 	for _, fileStat := range st.FileStats {
+		if fileStat == nil {
+			continue
+		}
 		if fileStat.Id == fileID {
 			stFile = fileStat
 			break
