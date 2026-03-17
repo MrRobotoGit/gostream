@@ -386,16 +386,12 @@ func (d *DiskWarmupCache) WriteTail(hash string, fileID int, data []byte, absolu
 	if val, ok := d.tailCoverage.Load(path); ok {
 		tr := val.(*tailRange)
 		tr.mu.Lock()
-		if relOffset == tr.highWatermark {
+		if endOff > tr.highWatermark {
 			tr.highWatermark = endOff
 		}
 		tr.mu.Unlock()
 	} else {
-		hw := int64(0)
-		if relOffset == 0 {
-			hw = endOff
-		}
-		d.tailCoverage.Store(path, &tailRange{highWatermark: hw})
+		d.tailCoverage.Store(path, &tailRange{highWatermark: endOff})
 	}
 }
 
@@ -418,11 +414,14 @@ func (d *DiskWarmupCache) ReadTail(hash string, fileID int, buf []byte, absolute
 		miss := readEnd > tr.highWatermark
 		tr.mu.Unlock()
 		if miss {
-			return 0, nil
+			fi, err := os.Stat(path)
+			if err != nil || fi.Size() < readEnd {
+				return 0, nil
+			}
 		}
 	} else {
 		fi, err := os.Stat(path)
-		if err != nil || fi.Size() < tailWarmupSize {
+		if err != nil || fi.Size() < readEnd {
 			return 0, nil
 		}
 		d.tailCoverage.Store(path, &tailRange{highWatermark: fi.Size()})

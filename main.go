@@ -919,6 +919,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		h.hash = finalHash
 		h.fileID = fileIdx
 		// V310: pump starts lazily on first real Read() to anchor to player position
+
 	}
 
 	// V182: Register for cleanup
@@ -1059,10 +1060,11 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 				buf := make([]byte, 16)
 				nRead, _ := diskWarmup.ReadAt(h.hash, h.fileID, buf, 0)
 				isHeaderValid := false
-				if nRead >= 4 {
-					if (buf[0] == 0x1A && buf[1] == 0x45 && buf[2] == 0xDF && buf[3] == 0xA3) ||
-						(buf[4] == 'f' && buf[5] == 't' && buf[6] == 'y' && buf[7] == 'p') ||
-						(buf[0] == 0x00 && buf[1] == 0x00 && buf[2] == 0x00) {
+				// V262-Fix: require at least 8 bytes; removed the 0x00/0x00/0x00 catch-all
+				// which is a false positive for sparse/zero-filled warmup files.
+				if nRead >= 8 {
+					if (buf[0] == 0x1A && buf[1] == 0x45 && buf[2] == 0xDF && buf[3] == 0xA3) || // MKV EBML
+						(buf[4] == 'f' && buf[5] == 't' && buf[6] == 'y' && buf[7] == 'p') { // MP4/ISO ftyp
 						isHeaderValid = true
 					}
 				}
@@ -1081,6 +1083,11 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 					resumeOffset = skipOffset
 					logger.Printf("[DiskWarmup] PUMP SKIP: Starting from %.1fMB (Disk: %.1fMB, Margin: 16MB)",
 						float64(resumeOffset)/(1<<20), float64(diskOffset)/(1<<20))
+
+					// V261-Preseed: REMOVED. The FUSE Read handler serves [0, warmupFileSize)
+					// directly from SSD before checking raCache, so preseed entries are never
+					// read by the player. They waste raCache budget (48MB) and cause premature
+					// eviction of the boundary chunk at warmupFileSize → playback freeze.
 				}
 			}
 		}
@@ -1206,9 +1213,26 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		// V239: Release-on-Idle Logic
 		// If the player hasn't requested data, yield the slot based on health status.
 		// V262: Intelligent Timeout - confirmed playback gets 2 hours, background scans get 45s.
-		h.mu.Lock()
-		lastAct := h.lastActivityTime
-		h.mu.Unlock()
+		// V262: Check activity across ALL handles for this path, not just the pump
+		// creator. The pump creator handle may be released while other handles still read.
+		lastAct := time.Time{}
+		activeHandles.Range(func(key, value interface{}) bool {
+			handle := key.(*MkvHandle)
+			if handle.path == h.path {
+				handle.mu.Lock()
+				if handle.lastActivityTime.After(lastAct) {
+					lastAct = handle.lastActivityTime
+				}
+				handle.mu.Unlock()
+			}
+			return true
+		})
+		// Fallback to pump creator's activity if no active handles found
+		if lastAct.IsZero() {
+			h.mu.Lock()
+			lastAct = h.lastActivityTime
+			h.mu.Unlock()
+		}
 
 		timeoutLimit := 45 * time.Second
 		if val, ok := playbackRegistry.Load(h.path); ok {
@@ -1303,7 +1327,18 @@ func (h *MkvHandle) nativePumpChunk(r *NativeReader, offset, chunkSize, playerOf
 	// Previously, we disabled throttling if playerOff < warmupFileSize.
 	// This caused the pump to race ahead, overwrite the raCache ring buffer,
 	// and cause cache misses at the handover point (64MB).
-	if diff > budget {
+	//
+	// V303c: When disk warmup is active and player is still reading from SSD,
+	// tighten the hard limit by one chunkSize. This ensures the pump never fills
+	// raCache to exactly budget bytes (which would evict the boundary chunk at
+	// warmupFileSize on the next Put). Without this, the entry at 64MB gets evicted
+	// ~17s before the player arrives there → FetchBlock + re-download → freeze.
+	// Only applies during warmup phase; once player passes warmupFileSize, full budget.
+	effectiveBudget := budget
+	if diskWarmup != nil && playerOff < warmupFileSize {
+		effectiveBudget = budget - chunkSize
+	}
+	if diff > effectiveBudget {
 		// Hard limit reached: Wait for player to advance.
 		time.Sleep(100 * time.Millisecond)
 		return false, offset
@@ -1329,7 +1364,8 @@ func (h *MkvHandle) nativePumpChunk(r *NativeReader, offset, chunkSize, playerOf
 
 	// V303: Skip torrent read for offsets already covered by disk warmup.
 	// Pump jumps to warmupFileSize instantly; player reads warmup from SSD.
-	// Eliminates raCache miss at warmup handoff that caused playback stutters.
+	// No raCache seeding here — SSD serves these offsets directly in FUSE Read().
+	// Seeding would waste raCache budget and cause eviction of the boundary chunk.
 	if diskWarmup != nil && h.hash != "" && offset < warmupFileSize {
 		warmupCoverage := diskWarmup.GetAvailableRange(h.hash, h.fileID)
 		if warmupCoverage >= offset+chunkSize {
@@ -1477,7 +1513,6 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			if off == 0 {
 				logger.Printf("[DiskWarmup] HIT %s off=0 (%dKB)", filepath.Base(h.path), n/1024)
 			}
-
 			// V570: Restore lastOff for Head Warmup to keep pump in sync during start.
 			atomic.StoreInt64(&h.lastOff, off)
 
