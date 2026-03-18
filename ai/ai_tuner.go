@@ -153,7 +153,13 @@ func runTuningCycle(aiURL string) {
 		peakCPUCycle = 0
 		if lastActiveHash != "" {
 			go resetLlamaCache(aiURL)
+			if lastConns != defaultConns || lastTimeout != defaultTimeout {
+				log.Printf("[AI-Pilot] Playback ended — restoring defaults (Conns:%d Timeout:%ds)", defaultConns, defaultTimeout)
+				lastConns = defaultConns
+				lastTimeout = defaultTimeout
+			}
 		}
+		atomic.StoreInt32(&CurrentLimit, 0) // fall back to globalConfig.MasterConcurrencyLimit
 		lastActiveHash = ""
 		return
 	}

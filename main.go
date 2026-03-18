@@ -924,11 +924,8 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	if isNative {
 		h.hash = finalHash
 		h.fileID = fileIdx
-		// Gillian: proactive pump start at Open() — pump ready before first Read().
-		// pumpOnce ensures single start; late rescue path in Read() handles hash=='' case.
-		h.pumpOnce.Do(func() {
-			h.startNativePump(finalHash, fileIdx)
-		})
+		// Pump starts on first real Read() — see Read() after isTailProbe detection.
+		// Late rescue path in Read() handles hash=='' case.
 	}
 
 	// V182: Register for cleanup
@@ -1007,7 +1004,10 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		if curPos := atomic.LoadInt64(&ps.playerOff); curPos > 0 {
 			atomic.StoreInt64(&h.lastOff, curPos)
 		}
-		logger.Printf("[V264] Attached to existing pump (Refs: %d): %s", atomic.LoadInt32(&ps.refCount), filepath.Base(h.path))
+		// [V264] Attach logged only at Refs > 1 to reduce Samba open/close cycle noise.
+		if refs := atomic.LoadInt32(&ps.refCount); refs > 1 {
+			logger.Printf("[V264] Attached to existing pump (Refs: %d): %s", refs, filepath.Base(h.path))
+		}
 		pumpCreationMu.Unlock()
 		return
 	}
@@ -1494,14 +1494,24 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		}
 	}
 
+	// Start pump on first real (non-tail-probe) Read — avoids spurious pump goroutines from probe-only handles.
+	if !isTailProbe && h.hash != "" {
+		h.pumpOnce.Do(func() {
+			h.startNativePump(h.hash, h.fileID)
+		})
+	}
+
 	// V286: Seek-Aware Interrupt. If player jumped far, wake up the pump immediately.
 	// V560: Skip for pre-confirmation tail reads — served by SSD, pump must not be interrupted.
 	budget := int64(globalConfig.ReadAheadBudget)
 	if h.nativeReader != nil && !isTailProbe && (off > prevOff+budget || (prevOff > off+budget && prevOff > 0)) {
 		h.nativeReader.Interrupt()
 		torrstor.ResetShield()
-		logger.Printf("[V286] Interrupt pump for seek+shield reset: %dMB → %dMB",
-			prevOff/(1024*1024), off/(1024*1024))
+		// Log only real seeks (prevOff >= 0), not first-read-on-new-handle noise (prevOff = -1).
+		if prevOff >= 0 {
+			logger.Printf("[V286] Interrupt pump for seek+shield reset: %dMB → %dMB",
+				prevOff/(1024*1024), off/(1024*1024))
+		}
 	}
 
 	// V256: Disk warmup cache — serves first 128MB from SSD while torrent activates.
@@ -1944,7 +1954,7 @@ DATA_READY:
 }
 
 func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
-	logger.Printf("=== RELEASE VIRTUAL === path=%s", h.path)
+	// Release logged by V260 below.
 
 	// V260: Shared Pump Reference Counting
 	if val, ok := activePumps.Load(h.path); ok {
@@ -1963,7 +1973,9 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 			return 0
 		}
 		newRefs := atomic.AddInt32(&ps.refCount, -1)
-		logger.Printf("[V260] Release handle for %s (Remaining Refs: %d)", filepath.Base(h.path), newRefs)
+		if newRefs > 0 {
+			logger.Printf("[V260] Release handle for %s (Remaining Refs: %d)", filepath.Base(h.path), newRefs)
+		}
 
 		if newRefs <= 0 {
 			// V420: Grace Period — allows Plex to close/reopen handles during CIFS
@@ -1988,7 +2000,8 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 					}
 				}
 			})
-			logger.Printf("[V420] Last handle closed: Shared Pump entering %s grace period for %s", graceDuration, filepath.Base(h.path))
+			// V420 "entering grace" suppressed — fires on every Samba open/read/close cycle (noise).
+			// V420 "Shared Pump Terminated" below is the actionable event.
 		}
 	}
 
