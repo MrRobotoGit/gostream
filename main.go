@@ -840,12 +840,17 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	}
 
 	// V265: Dual-state Wake (Async with Warmup / Sync without).
-	// V304: Always sync Wake, even with warmup. With InfoBytes cached, Wake() returns
-	// in ~50ms (GotInfo instant + PeerAddrs injected). This ensures peer connections
-	// are established before Plex sends Read() at the resume position (cold seek).
-	// Previously: async Wake + warmup = Open() instant but FetchBlock timeout on resume.
+	// Gillian: async Wake when both head+tail warmup are ready — Open() returns instantly,
+	// disk warmup serves initial reads while torrent activates in background.
+	// Sync Wake when no warmup — blocks until torrent is ready before first Read().
 	if nativeBridge != nil && magnetCandidate != "" {
-		_ = nativeBridge.Wake(magnetCandidate, urlFileIdx)
+		if hasWarmup {
+			safeGo(func() {
+				_ = nativeBridge.Wake(magnetCandidate, urlFileIdx)
+			})
+		} else {
+			_ = nativeBridge.Wake(magnetCandidate, urlFileIdx)
+		}
 	}
 
 	// V148-Fix: Track both movies and TV shows for priority
@@ -919,8 +924,11 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	if isNative {
 		h.hash = finalHash
 		h.fileID = fileIdx
-		// V310: pump starts lazily on first real Read() to anchor to player position
-
+		// Gillian: proactive pump start at Open() — pump ready before first Read().
+		// pumpOnce ensures single start; late rescue path in Read() handles hash=='' case.
+		h.pumpOnce.Do(func() {
+			h.startNativePump(finalHash, fileIdx)
+		})
 	}
 
 	// V182: Register for cleanup
@@ -1494,14 +1502,6 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		torrstor.ResetShield()
 		logger.Printf("[V286] Interrupt pump for seek+shield reset: %dMB → %dMB",
 			prevOff/(1024*1024), off/(1024*1024))
-	}
-
-	// V310: Lazy pump start — fires once on first non-tail Read(), with lastOff already
-	// set to the player's actual position (used as resume anchor in startNativePump).
-	if h.hash != "" && !isTailProbe {
-		h.pumpOnce.Do(func() {
-			h.startNativePump(h.hash, h.fileID)
-		})
 	}
 
 	// V256: Disk warmup cache — serves first 128MB from SSD while torrent activates.
