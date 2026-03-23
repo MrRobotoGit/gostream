@@ -45,11 +45,14 @@ class ProwlarrClient:
         # Map Stremio types to Prowlarr search types
         # Movies -> movie, Series -> tvsearch
         prowlarr_type = "tvsearch" if content_type == "series" else "movie"
-        
+        # Newznab HD categories: 5040=TV HD (1080p+4K), 2040=Movies HD — pre-filter at indexer level
+        categories = "5040" if content_type == "series" else "2040"
+
         params = {
             "apikey": self.API_KEY,
-            "query": imdb_id,  # Prowlarr V1 uses query for ID searches
+            "query": imdb_id,
             "type": prowlarr_type,
+            "categories": categories,
             "indexerIds": "-2"  # All indexers
         }
         try:
