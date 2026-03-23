@@ -113,7 +113,7 @@ class ProwlarrClient:
                 elif re.search(r'720p', title, re.IGNORECASE):
                     res_tag = "720p"
                 else:
-                    res_tag = "1080p" # Safe default
+                    res_tag = ""  # Unknown resolution - quality filter will discard it
 
             # Convert size to GB for the title string
             size_gb = size_bytes / (1024 * 1024 * 1024)
