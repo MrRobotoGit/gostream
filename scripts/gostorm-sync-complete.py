@@ -2239,9 +2239,15 @@ class GoStormSync:
                 continue
 
             # Filter by language.
-            # EN/IT are always accepted. Other languages need Italian premium streaming availability.
+            # EN/IT: always accepted.
+            # European languages: accepted only if on Italian premium streaming (likely dubbed).
+            # All other languages (hi, ko, zh, ja, th, ar, ...): always rejected.
+            EUROPEAN_LANGUAGES = {'fr', 'de', 'es', 'pt', 'nl', 'da', 'sv', 'no', 'pl', 'cs', 'hu', 'ro', 'el', 'tr'}
             original_language = movie.get('original_language', '')
             if original_language not in ['en', 'it']:
+                if original_language not in EUROPEAN_LANGUAGES:
+                    skipped_non_premium_international += 1
+                    continue
                 details = self._fetch_movie_details(movie_id)
                 if not self._is_movie_on_premium_streaming_it(details):
                     skipped_non_premium_international += 1
@@ -2253,7 +2259,7 @@ class GoStormSync:
         # Sort by release date (newest first)
         filtered_results.sort(key=lambda x: x.get('release_date', '1900-01-01'), reverse=True)
         
-        self.log("INFO", f"Movie discovery: kept={len(filtered_results)}, bypass_non_en_it_premium={bypassed_non_en_it_via_premium}, skipped_non_premium_international={skipped_non_premium_international}")
+        self.log("INFO", f"Movie discovery: kept={len(filtered_results)}, bypassed_eu_premium={bypassed_non_en_it_via_premium}, skipped_non_eu={skipped_non_premium_international}")
         return filtered_results
 
     def get_tmdb_latest_tv(self) -> List[Dict]:
