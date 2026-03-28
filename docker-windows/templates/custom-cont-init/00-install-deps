@@ -1,0 +1,34 @@
+#!/usr/bin/with-contenv bash
+set -euo pipefail
+
+# Minimal deterministic init:
+# - Ensure all bind-mounted directories exist
+# - Clean up only stale FUSE layers that can survive an unclean container restart
+
+: "${MKV_PROXY_CONFIG_PATH:=/config.json}"
+: "${GOSTREAM_ROOT_PATH:=/gostream/state}"
+: "${GOSTREAM_SOURCE_PATH:=/gostream/source}"
+: "${GOSTREAM_MOUNT_PATH:=/gostream/mount}"
+: "${GOSTREAM_STATE_DIR:=${GOSTREAM_ROOT_PATH}/STATE}"
+: "${GOSTREAM_LOG_DIR:=${GOSTREAM_ROOT_PATH}/logs}"
+
+mkdir -p "$GOSTREAM_SOURCE_PATH" "$GOSTREAM_MOUNT_PATH" "$GOSTREAM_ROOT_PATH" "$GOSTREAM_STATE_DIR" "$GOSTREAM_LOG_DIR"
+
+mount_is_readable() {
+  ls -ld "$1" >/dev/null 2>&1
+}
+
+if mountpoint -q "$GOSTREAM_MOUNT_PATH" 2>/dev/null; then
+  if grep -q " $GOSTREAM_MOUNT_PATH fuse" /proc/mounts 2>/dev/null; then
+    echo "Stale FUSE mount detected at $GOSTREAM_MOUNT_PATH, cleaning up..." >&2
+    fusermount3 -uz "$GOSTREAM_MOUNT_PATH" 2>/dev/null || true
+    if ! mount_is_readable "$GOSTREAM_MOUNT_PATH"; then
+      echo "FUSE mount at $GOSTREAM_MOUNT_PATH is still unreadable after cleanup" >&2
+      exit 1
+    fi
+  fi
+fi
+
+if [ ! -f "$MKV_PROXY_CONFIG_PATH" ]; then
+  echo "WARNING: Missing config at $MKV_PROXY_CONFIG_PATH (gostream will fail until mounted)" >&2
+fi

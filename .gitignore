@@ -1,5 +1,6 @@
 # Real config with credentials — use config.json.example as template
 config.json
+AGENTS.md
 CLAUDE.md
 GEMINI.md
 
@@ -28,3 +29,11 @@ gostream
 
 .gemini/
 gha-creds-*.json
+
+# Local user deploy compose (machine-specific paths)
+my-deploy.compose.yaml
+docker-windows/my-deploy/
+
+# Local installer/testing artifacts
+docker-windows/test/
+.sisyphus/
