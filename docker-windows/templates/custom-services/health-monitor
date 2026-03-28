@@ -1,0 +1,15 @@
+#!/usr/bin/with-contenv bash
+set -euo pipefail
+
+if [ "${GOSTREAM_HEALTH_MONITOR_ENABLED:-1}" != "1" ]; then
+  echo "GOSTREAM_HEALTH_MONITOR_ENABLED != 1; skipping health-monitor" >&2
+  exit 0
+fi
+
+# Activate venv created in the image.
+if [ -f /app/venv/bin/activate ]; then
+  # shellcheck disable=SC1091
+  source /app/venv/bin/activate
+fi
+
+exec python3 /app/scripts/health-monitor.py

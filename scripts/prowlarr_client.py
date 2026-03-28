@@ -10,16 +10,25 @@ import os
 import requests
 from typing import List, Dict, Any, Optional
 
+
+def _resolve_config_path(config_path: Optional[str] = None) -> str:
+    if config_path:
+        return config_path
+
+    env_path = os.environ.get('MKV_PROXY_CONFIG_PATH')
+    if env_path:
+        return env_path
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(script_dir, '..', 'config.json')
+
 class ProwlarrClient:
     def __init__(self, config_path=None):
-        # Load config from GoStream config.json (co-located with binary, one level up from scripts/)
-        if config_path is None:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(script_dir, '..', 'config.json')
+        config_path = _resolve_config_path(config_path)
 
         prowlarr_cfg = {}
         try:
-            with open(config_path, 'r') as f:
+            with open(config_path, 'r', encoding='utf-8') as f:
                 cfg = json.load(f)
                 prowlarr_cfg = cfg.get('prowlarr', {})
         except Exception as e:

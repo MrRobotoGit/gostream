@@ -1,0 +1,65 @@
+# Single-container stack: media server (Plex/Jellyfin) + GoStream sidecar processes.
+# NOTE: This file is a template. Docker Compose will interpolate ${VARS} using the .env
+# file written by the Windows BAT (no hardcoded host paths).
+
+services:
+  # NOTE: Docker Compose does not reliably interpolate environment variables in
+  # YAML mapping keys (service names). Keep the service key deterministic and
+  # use container_name for the desired name.
+  app:
+    build:
+      context: ${STACK_DIR}
+      dockerfile: Dockerfile
+    container_name: ${CONTAINER_NAME}
+    restart: unless-stopped
+
+    # FUSE support (GoStream virtual filesystem)
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+
+    # Host port mappings (BAT must assign concrete host ports)
+    ports:
+      # Media server (one image will actually listen; unused mappings are harmless)
+      - "${PLEX_HOST_PORT}:32400"
+      - "${JELLYFIN_HOST_PORT}:8096"
+
+      # GoStream / GoStorm
+      - "${GOSTORM_HOST_PORT}:8090"
+      - "${HEALTH_HOST_PORT}:8095"
+      - "${METRICS_HOST_PORT}:${GOSTREAM_METRICS_PORT}"
+
+    environment:
+      - MKV_PROXY_CONFIG_PATH=/config.json
+      - GOSTREAM_ROOT_PATH=/gostream/state
+      - GOSTREAM_SOURCE_PATH=/gostream/source
+      - GOSTREAM_MOUNT_PATH=/gostream/mount
+      - GOSTREAM_STATE_DIR=/gostream/state/STATE
+      - GOSTREAM_LOG_DIR=/gostream/state/logs
+      - GOSTREAM_HEALTH_MONITOR_ENABLED=1
+      - HEALTH_MONITOR_PORT=8095
+      # LinuxServer base image vars — BAT may provide overrides or defaults
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - VERSION=docker
+      - PLEX_CLAIM=${PLEX_CLAIM}
+
+    volumes:
+      # GoStream source + state
+      - "${BASE_DIR}/gostream-mkv-real:/gostream/source"
+      - "${BASE_DIR}/gostream:/gostream/state"
+
+      # LinuxServer (Plex/Jellyfin) state
+      - "${BASE_DIR}/${CONTAINER_NAME}/config:/config"
+      - "${BASE_DIR}/${CONTAINER_NAME}/transcode:/transcode"
+
+      # GoStream config.json (BAT writes/patches this into the real-source tree)
+      - "${BASE_DIR}/gostream-mkv-real/config/config.json:/config.json:ro"
+
+      # s6-overlay hooks (mounted read-only; deterministic custom startup)
+      - "${STACK_DIR}/custom-services:/custom-services.d:ro"
+      - "${STACK_DIR}/custom-cont-init:/custom-cont-init.d:ro"
