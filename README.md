@@ -907,6 +907,18 @@ Or use `--privileged` as a simpler alternative to the individual capabilities (e
 docker build -f docker/Dockerfile -t gostream .
 ```
 
+### Windows Docker Installer
+
+For Windows users, a dedicated installer generates a ready-to-use [Dockge](https://github.com/louislam/dockge) stack with GoStream + Plex **or** Jellyfin in a single container:
+
+👉 **[docker-windows/](https://github.com/MrRobotoGit/gostream/tree/main/docker-windows)**
+
+- Run `docker-windows\install-rebuild.bat` — interactive setup (flavor, paths, ports)
+- Auto port conflict resolution
+- Idempotent rebuild: never deletes existing media or config data
+
+> **Requires:** Docker Desktop with WSL2 (Linux containers) and FUSE support (`/dev/fuse` available inside containers).
+
 ---
 
 ## API Quick Reference
