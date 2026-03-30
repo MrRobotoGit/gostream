@@ -1564,9 +1564,6 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	// ConfirmedAt.IsZero(). Post-confirmation tail reads fall through to the pump for fresh data.
 	// V1.4.7: Added atomic warmupEligible guard to skip SSD during resume/seek.
 	if isTailProbe && diskWarmup != nil && h.warmupEligible.Load() {
-		// V560-Fix: Tail reads must NOT steer the pump. Restore lastOff to prevOff so
-		// V284 doesn't jump the pump to the cold end-of-file on the next tick.
-		atomic.StoreInt64(&h.lastOff, prevOff)
 		n, _ := diskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
 		if n > 0 {
 			timing.UsedCache = true
