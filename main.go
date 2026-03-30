@@ -1346,6 +1346,17 @@ func (h *MkvHandle) nativePumpChunk(r *NativeReader, offset, chunkSize, playerOf
 		return false, offset + chunkSize
 	}
 
+	// V303: Pump jumps over warmup zone without downloading from torrent (initial play only).
+	// Player reads 0-64MB directly from SSD via Read(). Pump advances instantly to
+	// post-warmup territory, pre-filling raCache before the player crosses the 64MB boundary.
+	// Gated on warmupEligible: resume/seek (warmupEligible=false) always read from torrent.
+	if diskWarmup != nil && h.hash != "" && h.warmupEligible.Load() && offset <= warmupFileSize {
+		warmupCoverage := diskWarmup.GetAvailableRange(h.hash, h.fileID)
+		if warmupCoverage >= offset+chunkSize {
+			return false, offset + chunkSize
+		}
+	}
+
 	end := offset + chunkSize
 	if end > h.size {
 		end = h.size
