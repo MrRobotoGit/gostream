@@ -719,14 +719,11 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 
 	hashStr, urlFileIdx := ExtractHashAndIndex(n.vMeta.URL)
 
-	// hasWarmup: Open returns instantly only if both head and tail warmup files are ready.
-	hasWarmup := false
+	// hasFullWarmup: Open returns instantly only if both head and tail warmup files are ready.
+	// headReady: Allows async Wake and direct ID injection for instant start.
+	headReady := false
 	if diskWarmup != nil && hashStr != "" {
-		headReady := diskWarmup.GetAvailableRange(hashStr, urlFileIdx) > 0
-		tailReady := diskWarmup.GetTailRange(hashStr, urlFileIdx) > 0
-		if headReady && tailReady {
-			hasWarmup = true
-		}
+		headReady = diskWarmup.GetAvailableRange(hashStr, urlFileIdx) > 0
 	}
 
 	magnetCandidate := n.vMeta.URL
@@ -734,9 +731,9 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		magnetCandidate = "magnet:?xt=urn:btih:" + hashStr
 	}
 
-	// Async Wake when warmup is ready (Open returns instantly); sync Wake otherwise.
+	// Async Wake when head warmup is ready (Open returns instantly); sync Wake otherwise.
 	if nativeBridge != nil && magnetCandidate != "" {
-		if hasWarmup {
+		if headReady {
 			safeGo(func() {
 				_ = nativeBridge.Wake(magnetCandidate, urlFileIdx)
 			})
@@ -783,7 +780,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	var fileIdx int
 	var isNative bool
 
-	if hasWarmup && hashStr != "" {
+	if headReady && hashStr != "" {
 		finalHash = hashStr
 		fileIdx = urlFileIdx
 		isNative = true
@@ -804,7 +801,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		lastTime:         now,
 		lastOff:          -1,
 		lastActivityTime: now,            // Initialize activity tracking
-		hasWarmup:        hasWarmup,
+		hasWarmup:        headReady,      // Eligibility for fast SSD probes
 	}
 	h.state.Store(stateWarmup) // Initial state; transitions to stateStreaming on seek/resume.
 
