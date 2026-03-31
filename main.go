@@ -119,6 +119,8 @@ var reEmptyNumber = regexp.MustCompile(`"(\w+)":\s*,`)
 var activeHandles sync.Map    // key: *MkvHandle, value: bool
 var inFlightPrefetches sync.Map // key: "path:offset", value: bool
 var activePumps sync.Map      // Map[string]*NativePumpState — one pump per file path
+var pumpTimers sync.Map       // key: path, value: *time.Timer
+var priorityTimers sync.Map   // key: path, value: *time.Timer
 
 // Serializes concurrent pump creation for the same file.
 var pumpCreationMu sync.Mutex
@@ -707,6 +709,14 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	// PROACTIVE CLEANUP TRIGGER (V246): must be sync before any Read() can arrive.
 	raCache.SwitchContext(n.vMeta.Path)
 
+	// Cancel any pending release timers (Debounce)
+	if oldTimer, ok := pumpTimers.LoadAndDelete(n.vMeta.Path); ok {
+		oldTimer.(*time.Timer).Stop()
+	}
+	if oldTimer, ok := priorityTimers.LoadAndDelete(n.vMeta.Path); ok {
+		oldTimer.(*time.Timer).Stop()
+	}
+
 	hashStr, urlFileIdx := ExtractHashAndIndex(n.vMeta.URL)
 
 	// hasWarmup: Open returns instantly only if both head and tail warmup files are ready.
@@ -796,7 +806,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		lastActivityTime: now,            // Initialize activity tracking
 		hasWarmup:        hasWarmup,
 	}
-	h.warmupEligible.Store(true) // Enabled by default; disabled on resume/seek detection.
+	h.state.Store(stateWarmup) // Initial state; transitions to stateStreaming on seek/resume.
 
 	if isNative {
 		h.hash = finalHash
@@ -811,6 +821,27 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	activeHandles.Store(h, true)
 
 	return h, 0, 0
+}
+
+// handleState values for MkvHandle.state (atomic.Uint32).
+// A handle transitions one-way: stateWarmup → stateStreaming or stateTailProbe.
+const (
+	stateWarmup    uint32 = 0 // Initial: SSD warmup eligible (TTFF phase)
+	stateStreaming  uint32 = 1 // Pump-only streaming; no SSD warmup
+	stateTailProbe uint32 = 2 // Plex scan probe: tail region, stateless FetchBlock
+)
+
+func stateName(s uint32) string {
+	switch s {
+	case stateWarmup:
+		return "WARMUP"
+	case stateStreaming:
+		return "STREAMING"
+	case stateTailProbe:
+		return "TAIL_PROBE"
+	default:
+		return "UNKNOWN"
+	}
 }
 
 type MkvHandle struct {
@@ -831,11 +862,11 @@ type MkvHandle struct {
 	pumpCancel   context.CancelFunc
 	hasSlot      bool
 	isWatching      bool
-	hasWarmup       bool        // true if both head+tail warmup available at Open time
-	warmupEligible  atomic.Bool // TTFF warmup reads allowed; disabled on resume/seek
+	hasWarmup       bool         // true if both head+tail warmup available at Open time
+	state           atomic.Uint32 // handleState: stateWarmup | stateStreaming | stateTailProbe
 	pumpOnce        sync.Once
 	isPrimaryHandle bool // true for pump creator and primary reconnects (refCount 0→1)
-	}
+}
 // startNativePump acquires a slot and starts the background pump.
 // Called from Open (proactive) or Read (rescue for late resolution).
 func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
@@ -1183,8 +1214,8 @@ func (h *MkvHandle) nativePumpChunk(r *NativeReader, offset, chunkSize, playerOf
 	}
 
 	// Skip warmup zone during initial play (SSD serves 0-64MB); pump jumps ahead to pre-fill raCache.
-	// Gated on warmupEligible to avoid skip on resume/seek.
-	if diskWarmup != nil && h.hash != "" && h.warmupEligible.Load() && offset <= warmupFileSize {
+	// Gated on stateWarmup to avoid skip on resume/seek.
+	if diskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup && offset <= warmupFileSize {
 		warmupCoverage := diskWarmup.GetAvailableRange(h.hash, h.fileID)
 		if warmupCoverage >= offset+chunkSize {
 			return false, offset + chunkSize
@@ -1278,9 +1309,9 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	prevOff := atomic.LoadInt64(&h.lastOff)
 	atomic.StoreInt64(&h.lastOff, off)
 
-	// Disable warmup on resume (first read >= warmupFileSize) or seek (jump > budget).
+	// Transition WARMUP→STREAMING on resume (first read >= warmupFileSize) or seek (jump > budget).
 	// Checked after SSD path above so initial reads within warmup zone are still served.
-	if h.warmupEligible.Load() {
+	if h.state.Load() == stateWarmup {
 		isSeek := false
 		if prevOff == -1 {
 			if off >= warmupFileSize {
@@ -1293,8 +1324,8 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			}
 		}
 		if isSeek {
-			h.warmupEligible.Store(false)
-			logger.Printf("[Warmup] Seek/Resume detected (off=%dMB): SSD disabled.", off/(1024*1024))
+			h.state.Store(stateStreaming)
+			logger.Printf("[Warmup] Seek/Resume detected (off=%dMB): %s→%s.", off/(1024*1024), stateName(stateWarmup), stateName(stateStreaming))
 		}
 	}
 
@@ -1307,30 +1338,33 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		dynamicThreshold = 2 * 1024 * 1024 * 1024
 	}
 
-	isTailProbe := false
-	if h.hash != "" && h.size > dynamicThreshold && off >= h.size-dynamicThreshold {
+	// Transition WARMUP→TAIL_PROBE on first tail region read during discovery phase.
+	if h.state.Load() == stateWarmup && h.hash != "" && h.size > dynamicThreshold && off >= h.size-dynamicThreshold {
+		isUnconfirmed := true
 		if val, ok := playbackRegistry.Load(h.path); ok {
 			ps := val.(*PlaybackState)
 			ps.mu.RLock()
-			isTailProbe = ps.ConfirmedAt.IsZero()
+			isUnconfirmed = ps.ConfirmedAt.IsZero()
 			ps.mu.RUnlock()
-		} else {
-			isTailProbe = true // no registry entry = unconfirmed discovery phase
+		}
+		if isUnconfirmed {
+			h.state.Store(stateTailProbe)
 		}
 	}
+	isTailProbe := h.state.Load() == stateTailProbe
 
 	// Interrupt pump on genuine seeks; skip for SSD tail reads (pump must stay alive).
 	budget := int64(globalConfig.ReadAheadBudget)
 	if h.nativeReader != nil && !isTailProbe && shouldInterruptForSeek(prevOff, off, budget) {
 		h.nativeReader.Interrupt()
 		torrstor.ResetShield()
-		h.warmupEligible.Store(false)
-		logger.Printf("[V286] Interrupt pump for seek+shield reset: %dMB → %dMB (Warmup SSD disabled)",
-			prevOff/(1024*1024), off/(1024*1024))
+		h.state.Store(stateStreaming)
+		logger.Printf("[V286] Interrupt pump for seek+shield reset: %dMB → %dMB (%s→%s)",
+			prevOff/(1024*1024), off/(1024*1024), stateName(stateWarmup), stateName(stateStreaming))
 	}
 
-	// Serve first 64MB from SSD warmup; warmupEligible gate skips SSD on resume/seek.
-	if diskWarmup != nil && h.hash != "" && h.warmupEligible.Load() && off <= warmupFileSize {
+	// Serve first 64MB from SSD warmup; stateWarmup gate skips SSD on resume/seek.
+	if diskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup && off <= warmupFileSize {
 		n, _ := diskWarmup.ReadAt(h.hash, h.fileID, dest, off)
 		if n > 0 {
 			timing.UsedCache = true
@@ -1349,8 +1383,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 
 	// Serve tail from SSD only during discovery (pre-confirmation); post-confirmation uses pump.
-	// warmupEligible gate prevents resume handles from entering this path.
-	if isTailProbe && diskWarmup != nil && h.warmupEligible.Load() {
+	if isTailProbe && diskWarmup != nil {
 		n, _ := diskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
 		if n > 0 {
 			timing.UsedCache = true
@@ -1731,7 +1764,12 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 					graceDuration = 90 * time.Second
 				}
 			}
-			time.AfterFunc(graceDuration, func() {
+			if oldTimer, ok := pumpTimers.LoadAndDelete(h.path); ok {
+				oldTimer.(*time.Timer).Stop()
+			}
+			var t *time.Timer
+			t = time.AfterFunc(graceDuration, func() {
+				pumpTimers.CompareAndDelete(h.path, t)
 				if val, ok := activePumps.Load(h.path); ok {
 					psNow := val.(*NativePumpState)
 					if atomic.LoadInt32(&psNow.refCount) <= 0 {
@@ -1743,6 +1781,7 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 					}
 				}
 			})
+			pumpTimers.Store(h.path, t)
 			logger.Printf("[V420] Last handle closed: Shared Pump entering %s grace period for %s", graceDuration, filepath.Base(h.path))
 		}
 	}
@@ -1770,7 +1809,12 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 		}
 	}
 
-	time.AfterFunc(retentionDelay, func() {
+	if oldTimer, ok := priorityTimers.LoadAndDelete(h.path); ok {
+		oldTimer.(*time.Timer).Stop()
+	}
+	var t *time.Timer
+	t = time.AfterFunc(retentionDelay, func() {
+		priorityTimers.CompareAndDelete(h.path, t)
 		stillActive := false
 		activeHandles.Range(func(key, value interface{}) bool {
 			activeH := key.(*MkvHandle)
@@ -1841,6 +1885,7 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 		// Cleanup handled by GlobalCleanupManager (15 min timeout).
 		// playbackRegistry.Delete(h.path)
 	})
+	priorityTimers.Store(h.path, t)
 
 	return 0
 }
