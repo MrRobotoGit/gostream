@@ -151,17 +151,17 @@ func (c *NativeClient) NewStreamReader(hash string, fileID int, totalSize int64)
 
 // NativeReader implements a hybrid stateful/stateless reader for Torrent files.
 type NativeReader struct {
-	mu           sync.Mutex
-	hash         string
-	fileID       int
-	offset       int64
-	pipeReader   *io.PipeReader
-	pipeWriter   *io.PipeWriter
-	cancelFunc   context.CancelFunc
-	closed       bool
-	lastActivity time.Time
-	interrupted        atomic.Bool // V286: set by Interrupt(), cleared by next startStream
-	pipeReaderAtomic   atomic.Pointer[io.PipeReader]
+	mu               sync.Mutex
+	hash             string
+	fileID           int
+	offset           int64
+	pipeReader       *io.PipeReader
+	pipeWriter       *io.PipeWriter
+	cancelFunc       context.CancelFunc
+	closed           bool
+	lastActivity     time.Time
+	interrupted      atomic.Bool // V286: set by Interrupt(), cleared by next startStream
+	pipeReaderAtomic atomic.Pointer[io.PipeReader]
 }
 
 // ErrInterrupted is returned by ReadAt when the pipe was closed by Interrupt().
@@ -188,7 +188,7 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 	if r.pipeReader != nil && off == r.offset {
 		n, err = io.ReadFull(r.pipeReader, p)
 		r.offset += int64(n)
-		
+
 		if err == nil || err == io.EOF || err == io.ErrUnexpectedEOF {
 			return n, nil
 		}
@@ -216,7 +216,7 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 			}
 			log.Printf("[NativeReader] Smart Seek Read Error: %v - Attempting Transparent Reconnect at offset %d", err, off)
 		}
-		
+
 		if r.interrupted.Swap(false) {
 			r.closeStream()
 			return 0, ErrInterrupted
@@ -315,6 +315,10 @@ func (r *NativeReader) closeStream() {
 }
 
 func (r *NativeReader) Close() error {
+	// Close pipeWriter BEFORE lock to unblock io.ReadFull in ReadAt goroutine
+	if pw := r.pipeWriter; pw != nil {
+		pw.Close()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
