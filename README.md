@@ -359,8 +359,7 @@ GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrSe
 ## Quick Install
 
 ```bash
-git clone https://github.com/MrRobotoGit/gostream gostream
-cd gostream
+curl -fsSL https://raw.githubusercontent.com/MrRobotoGit/gostream/main/install.sh -o install.sh
 chmod +x install.sh
 ./install.sh
 ```
