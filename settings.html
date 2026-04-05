@@ -993,8 +993,7 @@
                                 </div>
                             </div>
                             <div class="sched-meta" id="sched-movies-meta"></div>
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="runSyncNow('sync')">▶ Run
-                                now</button>
+                            <button type="button" id="sched-movies-btn" class="btn btn-secondary btn-sm" onclick="runSyncNow('movies')">▶ Run now</button>
                         </div>
 
                         <!-- TV Series Library Sync -->
@@ -1011,8 +1010,7 @@
                                 </div>
                             </div>
                             <div class="sched-meta" id="sched-tv-meta"></div>
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="runSyncNow('tv-sync')">▶ Run
-                                now</button>
+                            <button type="button" id="sched-tv-btn" class="btn btn-secondary btn-sm" onclick="runSyncNow('tv')">▶ Run now</button>
                         </div>
 
                         <!-- Plex Watchlist Sync -->
@@ -1032,8 +1030,7 @@
                                 </select>
                             </div>
                             <div class="sched-meta" id="sched-wl-meta"></div>
-                            <button type="button" class="btn btn-secondary btn-sm"
-                                onclick="runSyncNow('watchlist-sync')">▶ Run now</button>
+                            <button type="button" id="sched-wl-btn" class="btn btn-secondary btn-sm" onclick="runSyncNow('watchlist')">▶ Run now</button>
                         </div>
 
                     </div><!-- /#sched-body -->
@@ -1494,6 +1491,19 @@
             }
             if (rt.running) parts.push('<span style="color:#22c55e">● Running</span>');
             el.innerHTML = parts.join(' &nbsp;|&nbsp; ');
+            // Sync button state with API
+            const jobMap = {'sched-movies-meta':'movies','sched-tv-meta':'tv','sched-wl-meta':'watchlist'};
+            const job = jobMap[id];
+            const btnEl = document.getElementById(id.replace('-meta', '-btn'));
+            if (btnEl && job) {
+                if (rt.running) {
+                    btnEl.textContent = '⏹ Stop';
+                    btnEl.onclick = () => stopSyncNow(job);
+                } else {
+                    btnEl.textContent = '▶ Run now';
+                    btnEl.onclick = () => runSyncNow(job);
+                }
+            }
         }
 
         async function loadScheduler() {
@@ -1580,6 +1590,13 @@
                 const res = await fetch(`${monitorBase}/api/scheduler/${type}/run`, { method: 'POST' });
                 if (res.ok) setTimeout(loadScheduler, 1000);
             } catch (e) { console.error('runSyncNow error', e); }
+        }
+
+        async function stopSyncNow(type) {
+            try {
+                const res = await fetch(`${monitorBase}/api/scheduler/${type}/stop`, { method: 'POST' });
+                if (res.ok) setTimeout(loadScheduler, 1000);
+            } catch (e) { console.error('stopSyncNow error', e); }
         }
 
         // Build pickers then load data
