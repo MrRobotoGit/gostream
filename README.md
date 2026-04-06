@@ -132,7 +132,7 @@ When you press Play, Infuse immediately reads the beginning and end of the file 
 
 Every file on a real filesystem has a permanent ID called an **inode**. Plex/Jellyfin and Infuse use these IDs to recognize files across restarts, so they know "this is the same film I scanned last week" and do not re-download metadata or reset your watch history.
 
-On a standard virtual filesystem, these IDs are random and change every time the system restarts. GoStream solves this by saving a persistent inode map (`inode_map.json`) to disk. After a reboot, every virtual `.mkv` gets back the exact same ID it had before. To Plex/Jellyfin and Infuse, it is indistinguishable from a file that never moved.
+On a standard virtual filesystem, these IDs are random and change every time the system restarts. GoStream solves this by persisting a permanent inode map to a SQLite database (`STATE/gostream.db`). After a reboot, every virtual `.mkv` gets back the exact same ID it had before. To Plex/Jellyfin and Infuse, it is indistinguishable from a file that never moved.
 
 ### When you press Play: the full chain
 
@@ -281,7 +281,7 @@ All sync logic runs natively inside the Go binary — no Python, no external scr
 **Quality ladder**: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`\
 **Minimum seeders**: 20 (main sync), 10 (watchlist sync, for older films)
 
-All sync state (episode registry, negative caches, scheduler state) is persisted in `STATE/` as JSON. The built-in scheduler replaces system cron and is configurable from the Control Panel.
+All sync state (episode registry, negative caches, scheduler state) is persisted in `STATE/gostream.db` (SQLite). The built-in scheduler replaces system cron and is configurable from the Control Panel.
 
 ### 8. NAT-PMP Native VPN Port Forwarding
 
@@ -689,7 +689,7 @@ Built into the Go binary. Configured from the **Sync Scheduler** card in the Con
 - **TV Series Libraries Sync** — select weekdays + start time
 - **Plex Watchlist Sync** — interval-based (1 h, 2 h … 24 h)
 
-Last/next run times and live status are shown in the card. State persists across restarts in `STATE/scheduler_state.json`.
+Last/next run times and live status are shown in the card. State persists across restarts in `STATE/gostream.db`.
 
 ---
 
@@ -1072,7 +1072,7 @@ Paths below use the defaults set by `install.sh`. All are configurable during in
 |------|---------|
 | `~/GoStream/gostream` | Production binary |
 | `~/GoStream/config.json` | Live configuration (edit → `sudo systemctl restart gostream`) |
-| `~/GoStream/STATE/` | Inode map, sync caches, scheduler state (co-located with install dir) |
+| `~/GoStream/STATE/gostream.db` | SQLite state database: inode map, sync caches, episode registry, scheduler state |
 | `~/GoStream/logs/` | All service logs (`gostream.log`, `movies-sync.log`, `tv-sync.log`, `watchlist-sync.log`) |
 | `/mnt/gostream-mkv-virtual/` | FUSE mount point (served to Plex/Jellyfin -> Samba) |
 | `/etc/systemd/system/gostream.service` | systemd service definition |
