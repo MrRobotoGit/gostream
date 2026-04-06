@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"gostream/internal/metadb"
 )
 
 // V133: Deterministic Inode Mapping for Plex/SMB Stability
@@ -46,6 +47,7 @@ type InodeMap struct {
 	stopChan chan struct{}
 	stopOnce sync.Once
 	saveMu   sync.Mutex // Serialize SaveToDisk
+	db       *metadb.DB // V1.7.1: Optional SQLite backend
 
 	// Statistics
 	hits   int64
@@ -110,6 +112,11 @@ func NewInodeMap(savePath string, logger Logger) *InodeMap {
 	return im
 }
 
+// SetDB enables SQLite persistence for the inode map.
+func (im *InodeMap) SetDB(db *metadb.DB) {
+	im.db = db
+}
+
 func (im *InodeMap) getShard(key string) *inodeShard {
 	return im.shards[xxhash.Sum64String(key)&im.shardMask]
 }
@@ -138,8 +145,58 @@ func (w *loggerWrapper) Printf(format string, v ...interface{}) {
 	}
 }
 
-// LoadFromDisk loads the inode map and distributes entries across shards
+// LoadFromDisk loads the inode map and distributes entries across shards.
+// If SQLite is available (im.db != nil), loads from DB instead of JSON.
 func (im *InodeMap) LoadFromDisk() error {
+	if im.db != nil {
+		return im.loadFromDB()
+	}
+	return im.loadFromJSON()
+}
+
+// loadFromDB populates in-memory maps from SQLite.
+func (im *InodeMap) loadFromDB() error {
+	entries, err := im.db.LoadAll()
+	if err != nil {
+		return fmt.Errorf("inodemap: load from DB: %w", err)
+	}
+
+	var totalFiles, totalDirs int
+	for _, e := range entries {
+		if e.Type == "file" {
+			key := fmt.Sprintf("%s:%d", e.Infohash, e.FileIdx)
+			sName := im.getShard(e.FullPath)
+			sFile := im.getShard(key)
+			sFast := im.getShard(e.Basename)
+
+			sName.mu.Lock()
+			sName.nameMap[e.FullPath] = key
+			sName.mu.Unlock()
+
+			sFile.mu.Lock()
+			sFile.fileMap[key] = e.InodeValue
+			sFile.mu.Unlock()
+
+			sFast.mu.Lock()
+			sFast.fastFileMap[e.Basename] = e.InodeValue
+			sFast.mu.Unlock()
+
+			totalFiles++
+		} else if e.Type == "dir" {
+			s := im.getShard(e.RelPath)
+			s.mu.Lock()
+			s.dirMap[e.RelPath] = e.InodeValue
+			s.mu.Unlock()
+			totalDirs++
+		}
+	}
+
+	im.logger.Printf("InodeMap: Loaded %d files, %d dirs from StateDB", totalFiles, totalDirs)
+	return nil
+}
+
+// loadFromJSON loads from the legacy JSON file (fallback when StateDB is disabled).
+func (im *InodeMap) loadFromJSON() error {
 	data, err := os.ReadFile(im.savePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -242,11 +299,104 @@ func (im *InodeMap) LoadFromDisk() error {
 	return nil
 }
 
-// SaveToDisk merges all shards into a single JSON file
+// SaveToDisk persists the inode map.
+// If SQLite is available, writes to DB; otherwise falls back to JSON.
 func (im *InodeMap) SaveToDisk() error {
 	im.saveMu.Lock()
 	defer im.saveMu.Unlock()
 
+	if im.db != nil {
+		return im.saveToDB()
+	}
+	return im.saveToJSON()
+}
+
+// saveToDB writes all shard entries to SQLite in a single transaction.
+func (im *InodeMap) saveToDB() error {
+	// Build full paths from nameMap: fullPath -> "infohash:fileIdx"
+	nameMap := make(map[string]string)
+	for _, s := range im.shards {
+		s.mu.RLock()
+		for k, v := range s.nameMap {
+			nameMap[k] = v
+		}
+		s.mu.RUnlock()
+	}
+
+	// Build reverse map: "infohash:fileIdx" -> fullPath
+	keyToPath := make(map[string]string)
+	for fullPath, key := range nameMap {
+		keyToPath[key] = fullPath
+	}
+
+	tx, err := im.db.SQL().Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Clear existing inodes before rewrite
+	if _, err := tx.Exec("DELETE FROM inodes"); err != nil {
+		return err
+	}
+
+	stmtFile, err := tx.Prepare(
+		"INSERT OR REPLACE INTO inodes (type, infohash, file_idx, full_path, basename, inode_value) VALUES (?, ?, ?, ?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmtFile.Close()
+
+	stmtDir, err := tx.Prepare(
+		"INSERT OR REPLACE INTO inodes (type, full_path, rel_path, basename, inode_value) VALUES (?, ?, ?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmtDir.Close()
+
+	fileCount := 0
+	dirCount := 0
+
+	for _, s := range im.shards {
+		s.mu.RLock()
+		for key, inode := range s.fileMap {
+			fullPath := keyToPath[key]
+			parts := strings.SplitN(key, ":", 2)
+			infohash := key
+			fileIdx := 0
+			if len(parts) == 2 {
+				infohash = parts[0]
+				if idx, err := strconv.Atoi(parts[1]); err == nil {
+					fileIdx = idx
+				}
+			}
+			if _, err := stmtFile.Exec("file", infohash, fileIdx, fullPath, pathBase(fullPath), int64(inode)); err != nil {
+				s.mu.RUnlock()
+				return fmt.Errorf("inodemap: save file %s: %w", fullPath, err)
+			}
+			fileCount++
+		}
+		for relPath, inode := range s.dirMap {
+			if _, err := stmtDir.Exec("dir", relPath, relPath, pathBase(relPath), int64(inode)); err != nil {
+				s.mu.RUnlock()
+				return fmt.Errorf("inodemap: save dir %s: %w", relPath, err)
+			}
+			dirCount++
+		}
+		s.mu.RUnlock()
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	im.setDirty(false)
+	im.logger.Printf("InodeMap: Saved %d files, %d dirs to StateDB", fileCount, dirCount)
+	return nil
+}
+
+// saveToJSON persists to the legacy JSON file (fallback when StateDB is disabled).
+func (im *InodeMap) saveToJSON() error {
 	mergedFiles := make(map[string]string)
 	mergedDirs := make(map[string]string)
 	mergedNames := make(map[string]string)
@@ -481,14 +631,24 @@ func (im *InodeMap) PruneMissing(foundFiles map[string]bool) int {
 		s.mu.RUnlock()
 	}
 
-	// Pass 2: Remove using existing logic
+	// Pass 2: Remove from in-memory maps
 	for _, path := range toRemove {
 		im.RemoveFile(path)
 	}
 
+	// Pass 3: Also remove from SQLite if available
+	if im.db != nil && len(toRemove) > 0 {
+		pruned, err := im.db.PruneMissing(foundFiles)
+		if err != nil {
+			im.logger.Printf("InodeMap: Warning - failed to prune from DB: %v", err)
+		} else if pruned > 0 {
+			im.logger.Printf("InodeMap GC: Pruned %d entries from StateDB", pruned)
+		}
+	}
+
 	if len(toRemove) > 0 {
 		im.setDirty(true)
-		im.logger.Printf("InodeMap GC: Pruned %d ghost entries", len(toRemove))
+		im.logger.Printf("InodeMap GC: Pruned %d ghost entries from memory", len(toRemove))
 	}
 	return len(toRemove)
 }
@@ -505,6 +665,16 @@ func generateDirInode(relativePath string) uint64 {
 		return InodeRoot
 	}
 	return xxhash.Sum64String(relativePath) | InodeDirMask
+}
+
+// pathBase returns the base name of a path (equivalent to filepath.Base).
+func pathBase(p string) string {
+	for i := len(p) - 1; i >= 0; i-- {
+		if p[i] == '/' {
+			return p[i+1:]
+		}
+	}
+	return p
 }
 
 var (

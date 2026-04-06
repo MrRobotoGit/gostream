@@ -184,6 +184,10 @@ type Config struct {
 	TelemetryID     string `json:"telemetry_id"`
 	EnableTelemetry bool   `json:"telemetry"`
 	TelemetryURL    string `json:"telemetry_url"`
+
+	// --- State DB (V1.7.1) ---
+	EnableStateDB bool   `json:"enable_state_db"` // default: true
+	StateDBPath   string `json:"state_db_path"`   // default: <STATE>/gostream.db
 }
 
 // Save persists the current configuration to config.json
@@ -243,6 +247,8 @@ func LoadConfig() Config {
 
 		EnableTelemetry: true,
 		TelemetryURL:    "https://telemetry.gostream.workers.dev",
+
+		EnableStateDB: true,
 
 		// Legacy Fixed Defaults
 		DefaultFileSize:         30 * 1024 * 1024 * 1024,

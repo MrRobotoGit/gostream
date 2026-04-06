@@ -9,24 +9,26 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"gostream/internal/metadb"
 )
 
-// SyncCacheManager manages synchronization with Python sync script caches
-// Provides atomic JSON file operations to prevent corruption
-// V83: In-memory cache to eliminate disk I/O on every access
+// SyncCacheManager manages synchronization caches.
+// V83: In-memory cache to eliminate disk I/O on every access.
+// V1.7.1: SQLite persistence replaces JSON temp+rename writes.
 type SyncCacheManager struct {
 	stateDir string
 	mu       sync.RWMutex
 	logger   *log.Logger
+	db       *metadb.DB
 
 	// V83: In-memory caches (loaded at startup)
-	negativeCache map[string]NegativeCacheEntry // Loaded from no_mkv_hashes.json
-	fullpackCache map[string]FullpackCacheEntry // Loaded from tv_fullpacks.json
-	dirty         bool                           // Track if disk sync needed
+	negativeCache map[string]NegativeCacheEntry
+	fullpackCache map[string]FullpackCacheEntry
+	dirty         bool
 }
 
-// NewSyncCacheManager creates a new cache synchronization manager
-// V83: Initializes empty in-memory caches (LoadCachesFromDisk() must be called after)
+// NewSyncCacheManager creates a new cache synchronization manager.
 func NewSyncCacheManager(stateDir string, logger *log.Logger) *SyncCacheManager {
 	return &SyncCacheManager{
 		stateDir:      stateDir,
@@ -37,142 +39,143 @@ func NewSyncCacheManager(stateDir string, logger *log.Logger) *SyncCacheManager 
 	}
 }
 
-// NegativeCacheEntry represents a torrent hash without valid mkv files
-type NegativeCacheEntry struct {
-	Hash      string    `json:"hash"`
-	Timestamp time.Time `json:"timestamp"`
+// SetDB enables SQLite persistence. Call after NewSyncCacheManager and before any operations.
+func (s *SyncCacheManager) SetDB(db *metadb.DB) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.db = db
 }
 
-// FullpackCacheEntry represents a processed TV fullpack torrent
-type FullpackCacheEntry struct {
-	Hash        string    `json:"hash"`
-	Title       string    `json:"title"`
-	ProcessedAt time.Time `json:"processed_at"`
-}
-
-// AddedAt returns the timestamp when the entry was added
-// Needed for compatibility with old NegativeCacheEntry format
-func (e *NegativeCacheEntry) AddedAt() time.Time {
-	return e.Timestamp
-}
-
-// LoadCachesFromDisk loads cache files from disk into memory (one-time at startup)
-// V83: Eliminates disk I/O on every cache access (~3000 reads/hour → 0)
+// LoadCachesFromDisk loads cache entries into memory (one-time at startup).
+// If SQLite is available, loads from DB; otherwise falls back to JSON files.
 func (s *SyncCacheManager) LoadCachesFromDisk() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Load negative cache (no_mkv_hashes.json)
-	negPath := filepath.Join(s.stateDir, "no_mkv_hashes.json")
-	if data, err := ioutil.ReadFile(negPath); err == nil {
-		if err := json.Unmarshal(data, &s.negativeCache); err != nil {
+	if s.db != nil {
+		neg, full, err := s.db.LoadAllCaches()
+		if err != nil {
+			s.logger.Printf("SyncCache: Warning - failed to load from DB: %v", err)
+			// Fallback to JSON
+			return s.loadFromJSONLocked()
+		}
+		s.negativeCache = make(map[string]NegativeCacheEntry, len(neg))
+		for hash, entry := range neg {
+			ts, _ := time.Parse(time.RFC3339, entry.Timestamp)
+			s.negativeCache[hash] = NegativeCacheEntry{Hash: hash, Timestamp: ts}
+		}
+		s.fullpackCache = make(map[string]FullpackCacheEntry, len(full))
+		for hash, entry := range full {
+			ts, _ := time.Parse(time.RFC3339, entry.Timestamp)
+			s.fullpackCache[hash] = FullpackCacheEntry{Hash: hash, Title: entry.Title, ProcessedAt: ts}
+		}
+		s.logger.Printf("SyncCache: Loaded %d negative + %d fullpack entries from StateDB",
+			len(s.negativeCache), len(s.fullpackCache))
+		return nil
+	}
+
+	return s.loadFromJSONLocked()
+}
+
+func (s *SyncCacheManager) loadFromJSONLocked() error {
+	// Legacy JSON loading (fallback when StateDB is disabled)
+	negPath := GetStateDir() + "/no_mkv_hashes.json"
+	fullPath := GetStateDir() + "/tv_fullpacks.json"
+
+	if data, err := readFileSafe(negPath); err == nil {
+		if err := unmarshalJSON(data, &s.negativeCache); err != nil {
 			s.logger.Printf("SyncCache: Warning - failed to parse negative cache: %v", err)
 			s.negativeCache = make(map[string]NegativeCacheEntry)
 		}
-	} else if os.IsNotExist(err) {
-		// File doesn't exist yet - that's OK
-		s.negativeCache = make(map[string]NegativeCacheEntry)
 	} else {
-		s.logger.Printf("SyncCache: Warning - failed to read negative cache: %v", err)
 		s.negativeCache = make(map[string]NegativeCacheEntry)
 	}
 
-	// Load fullpack cache (tv_fullpacks.json)
-	fullPath := filepath.Join(s.stateDir, "tv_fullpacks.json")
-	if data, err := ioutil.ReadFile(fullPath); err == nil {
-		if err := json.Unmarshal(data, &s.fullpackCache); err != nil {
+	if data, err := readFileSafe(fullPath); err == nil {
+		if err := unmarshalJSON(data, &s.fullpackCache); err != nil {
 			s.logger.Printf("SyncCache: Warning - failed to parse fullpack cache: %v", err)
 			s.fullpackCache = make(map[string]FullpackCacheEntry)
 		}
-	} else if os.IsNotExist(err) {
-		// File doesn't exist yet - that's OK
-		s.fullpackCache = make(map[string]FullpackCacheEntry)
 	} else {
-		s.logger.Printf("SyncCache: Warning - failed to read fullpack cache: %v", err)
 		s.fullpackCache = make(map[string]FullpackCacheEntry)
 	}
 
 	s.logger.Printf("SyncCache: Loaded %d negative + %d fullpack entries from disk",
 		len(s.negativeCache), len(s.fullpackCache))
-
 	return nil
 }
 
-// SyncToDisk writes in-memory caches to disk if dirty flag is set
-// V83: Called periodically (every 30s) or on shutdown to persist changes
+// SyncToDisk writes in-memory caches to persistence if dirty flag is set.
+// With StateDB: writes a single transaction. Without: writes JSON via temp+rename.
 func (s *SyncCacheManager) SyncToDisk() error {
 	s.mu.Lock()
 
 	if !s.dirty {
 		s.mu.Unlock()
-		return nil // No changes to sync
+		return nil
 	}
 
-	// Copy caches to release lock quickly (don't hold lock during disk I/O)
-	negCopy := make(map[string]NegativeCacheEntry, len(s.negativeCache))
+	negCopy := make(map[string]metadb.NegativeCacheEntry, len(s.negativeCache))
 	for k, v := range s.negativeCache {
-		negCopy[k] = v
+		negCopy[k] = metadb.NegativeCacheEntry{
+			Hash:      k,
+			Timestamp: v.Timestamp.UTC().Format(time.RFC3339),
+		}
 	}
 
-	fullCopy := make(map[string]FullpackCacheEntry, len(s.fullpackCache))
+	fullCopy := make(map[string]metadb.FullpackCacheEntry, len(s.fullpackCache))
 	for k, v := range s.fullpackCache {
-		fullCopy[k] = v
+		fullCopy[k] = metadb.FullpackCacheEntry{
+			Hash:      k,
+			Title:     v.Title,
+			Timestamp: v.ProcessedAt.UTC().Format(time.RFC3339),
+		}
 	}
 
 	s.dirty = false
 	s.mu.Unlock()
 
-	// Write to disk outside of lock (atomic writes)
-	negPath := filepath.Join(s.stateDir, "no_mkv_hashes.json")
-	if err := s.atomicWriteJSON(negPath, negCopy); err != nil {
-		return fmt.Errorf("sync negative cache: %w", err)
+	if s.db != nil {
+		if err := s.db.SaveAllCaches(negCopy, fullCopy); err != nil {
+			s.logger.Printf("SyncCache: Warning - failed to save to DB: %v", err)
+			return fmt.Errorf("sync caches to DB: %w", err)
+		}
+		s.logger.Printf("SyncCache: Synced %d negative + %d fullpack entries to StateDB",
+			len(negCopy), len(fullCopy))
+		return nil
 	}
 
-	fullPath := filepath.Join(s.stateDir, "tv_fullpacks.json")
-	if err := s.atomicWriteJSON(fullPath, fullCopy); err != nil {
-		return fmt.Errorf("sync fullpack cache: %w", err)
-	}
-
-	s.logger.Printf("SyncCache: Synced %d negative + %d fullpack entries to disk",
-		len(negCopy), len(fullCopy))
-
-	return nil
+	// Fallback: legacy JSON write
+	return s.syncJSONLocked(negCopy, fullCopy)
 }
 
-// ClearNegativeCache removes a hash from the negative cache (no_mkv_hashes.json)
-// V83: Operates on RAM cache, marks dirty for eventual disk sync
+// ClearNegativeCache removes a hash from the negative cache.
 func (s *SyncCacheManager) ClearNegativeCache(hash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Remove from in-memory cache
 	if _, exists := s.negativeCache[hash]; exists {
 		delete(s.negativeCache, hash)
 		s.dirty = true
 		s.logger.Printf("SyncCache: Cleared negative cache for hash %s", hash[:8])
 	}
-
 	return nil
 }
 
-// ClearFullpackCache removes a hash from the fullpack cache (tv_fullpacks.json)
-// V83: Operates on RAM cache, marks dirty for eventual disk sync
+// ClearFullpackCache removes a hash from the fullpack cache.
 func (s *SyncCacheManager) ClearFullpackCache(hash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Remove from in-memory cache
 	if _, exists := s.fullpackCache[hash]; exists {
 		delete(s.fullpackCache, hash)
 		s.dirty = true
 		s.logger.Printf("SyncCache: Cleared fullpack cache for hash %s", hash[:8])
 	}
-
 	return nil
 }
 
-// CleanupStaleEntries removes expired entries from all caches
-// V83: Operates on RAM cache, marks dirty for eventual disk sync
+// CleanupStaleEntries removes expired entries from all caches.
 func (s *SyncCacheManager) CleanupStaleEntries(negativeTTL, fullpackTTL time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -180,7 +183,6 @@ func (s *SyncCacheManager) CleanupStaleEntries(negativeTTL, fullpackTTL time.Dur
 	now := time.Now()
 	removed := 0
 
-	// Cleanup negative cache (in-memory)
 	for hash, entry := range s.negativeCache {
 		if now.Sub(entry.Timestamp) > negativeTTL {
 			delete(s.negativeCache, hash)
@@ -188,7 +190,6 @@ func (s *SyncCacheManager) CleanupStaleEntries(negativeTTL, fullpackTTL time.Dur
 		}
 	}
 
-	// Cleanup fullpack cache (in-memory)
 	fullRemoved := 0
 	for hash, entry := range s.fullpackCache {
 		if now.Sub(entry.ProcessedAt) > fullpackTTL {
@@ -207,25 +208,86 @@ func (s *SyncCacheManager) CleanupStaleEntries(negativeTTL, fullpackTTL time.Dur
 	return nil
 }
 
-// atomicWriteJSON writes data to a JSON file atomically using temp file + rename
-// This prevents corruption if process is killed during write
-func (s *SyncCacheManager) atomicWriteJSON(path string, data interface{}) error {
-	// Marshal to JSON (V84: Compact format to save SD card I/O)
+// Stats returns cache statistics.
+func (s *SyncCacheManager) Stats() SyncCacheStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return SyncCacheStats{
+		NegativeCacheEntries: len(s.negativeCache),
+		FullpackCacheEntries: len(s.fullpackCache),
+	}
+}
+
+// SyncCacheStats holds cache statistics.
+type SyncCacheStats struct {
+	NegativeCacheEntries int
+	FullpackCacheEntries int
+}
+
+// NegativeCacheEntry represents a torrent hash without valid mkv files.
+type NegativeCacheEntry struct {
+	Hash      string    `json:"hash"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// AddedAt returns the timestamp when the entry was added.
+func (e *NegativeCacheEntry) AddedAt() time.Time {
+	return e.Timestamp
+}
+
+// FullpackCacheEntry represents a processed TV fullpack torrent.
+type FullpackCacheEntry struct {
+	Hash        string    `json:"hash"`
+	Title       string    `json:"title"`
+	ProcessedAt time.Time `json:"processed_at"`
+}
+
+// syncJSONLocked writes caches to JSON files using temp+rename (legacy fallback).
+func (s *SyncCacheManager) syncJSONLocked(
+	negCopy map[string]metadb.NegativeCacheEntry,
+	fullCopy map[string]metadb.FullpackCacheEntry,
+) error {
+	negPath := filepath.Join(s.stateDir, "no_mkv_hashes.json")
+	if err := atomicWriteJSON(negPath, negCopy); err != nil {
+		return fmt.Errorf("sync negative cache: %w", err)
+	}
+
+	fullPath := filepath.Join(s.stateDir, "tv_fullpacks.json")
+	if err := atomicWriteJSON(fullPath, fullCopy); err != nil {
+		return fmt.Errorf("sync fullpack cache: %w", err)
+	}
+
+	s.logger.Printf("SyncCache: Synced %d negative + %d fullpack entries to disk",
+		len(negCopy), len(fullCopy))
+	return nil
+}
+
+// readFileSafe reads a file, returning error if not found or unreadable.
+func readFileSafe(path string) ([]byte, error) {
+	return ioutil.ReadFile(path)
+}
+
+// unmarshalJSON unmarshals JSON data into a target.
+func unmarshalJSON(data []byte, target interface{}) error {
+	return json.Unmarshal(data, target)
+}
+
+// atomicWriteJSON writes data to a JSON file atomically using temp file + rename.
+func atomicWriteJSON(path string, data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal JSON: %w", err)
 	}
 
-	// Create temp file in same directory (ensures same filesystem for rename)
 	dir := filepath.Dir(path)
 	tempFile, err := ioutil.TempFile(dir, ".tmp-cache-*.json")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tempPath := tempFile.Name()
-	defer os.Remove(tempPath) // Cleanup on error
+	defer os.Remove(tempPath)
 
-	// Write to temp file
 	if _, err := tempFile.Write(jsonData); err != nil {
 		tempFile.Close()
 		return fmt.Errorf("write temp file: %w", err)
@@ -240,30 +302,9 @@ func (s *SyncCacheManager) atomicWriteJSON(path string, data interface{}) error 
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
-	// Atomic rename (POSIX guarantees atomicity)
 	if err := os.Rename(tempPath, path); err != nil {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 
 	return nil
-}
-
-// Stats returns cache statistics
-// V83: Read from RAM cache (instantaneous)
-func (s *SyncCacheManager) Stats() SyncCacheStats {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	stats := SyncCacheStats{
-		NegativeCacheEntries: len(s.negativeCache),
-		FullpackCacheEntries: len(s.fullpackCache),
-	}
-
-	return stats
-}
-
-// SyncCacheStats holds cache statistics
-type SyncCacheStats struct {
-	NegativeCacheEntries int
-	FullpackCacheEntries int
 }

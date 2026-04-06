@@ -189,14 +189,16 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 		n, err = io.ReadFull(r.pipeReader, p)
 		r.offset += int64(n)
 
-		if err == nil || err == io.EOF || err == io.ErrUnexpectedEOF {
-			return n, nil
-		}
-
-		// V286: If the pipe was closed by Interrupt(), return ErrInterrupted
+		// V286-fix: check interrupted BEFORE EOF — Close() closes pipeWriter without
+		// lock (deadlock fix), so it can cause io.EOF/ErrUnexpectedEOF that would
+		// otherwise mask an in-progress seek and silently corrupt the read offset.
 		if r.interrupted.Swap(false) {
 			r.closeStream()
 			return 0, ErrInterrupted
+		}
+
+		if err == nil || err == io.EOF || err == io.ErrUnexpectedEOF {
+			return n, nil
 		}
 
 		// V257: Resilience Fix - If pipe fails, attempt one transparent reconnect

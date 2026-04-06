@@ -15,6 +15,7 @@ import (
 	torrstor "gostream/internal/gostorm/torr/storage/torrstor"
 	tsutils "gostream/internal/gostorm/utils"
 	"gostream/internal/gostorm/web"
+	"gostream/internal/metadb"
 	"gostream/internal/monitor/collector"
 	"gostream/internal/monitor/dashboard"
 	"gostream/internal/opentracker"
@@ -112,6 +113,9 @@ var playbackRegistry sync.Map // path -> *PlaybackState
 
 // Global sync cache manager (FASE 4.13 - Sync Script Caches)
 var globalSyncCacheManager *SyncCacheManager
+
+// StateDB is the optional SQLite backend for persistent state.
+var stateDB *metadb.DB
 
 var physicalSourcePath string
 var virtualMountPath string
@@ -2881,6 +2885,35 @@ func main() {
 		logger.Printf("InodeMap: Initialized with %d files, %d dirs from %s", files, dirs, inodeMapPath)
 	}
 
+	// V1.7.1: Optional SQLite State DB for unified persistence.
+	if globalConfig.EnableStateDB {
+		dbPath := globalConfig.StateDBPath
+		if dbPath == "" {
+			dbPath = filepath.Join(GetStateDir(), "gostream.db")
+		}
+		var err error
+		stateDB, err = metadb.New(dbPath, logger)
+		if err != nil {
+			logger.Printf("WARNING: Failed to open StateDB: %v (falling back to JSON)", err)
+			stateDB = nil
+		} else {
+			// Migrate JSON files if needed
+			if err := stateDB.MigrateFromJSON(GetStateDir()); err != nil {
+				logger.Printf("WARNING: StateDB migration failed: %v (falling back to JSON)", err)
+				stateDB.Close()
+				stateDB = nil
+			} else {
+				// Wire up DB to InodeMap, then reload from DB (covers boot 2+ where JSON is gone)
+				globalInodeMap.SetDB(stateDB)
+				if err := globalInodeMap.LoadFromDisk(); err != nil {
+					logger.Printf("WARNING: Failed to reload InodeMap from DB: %v", err)
+				}
+				SetRegistryDB(stateDB)
+				logger.Printf("[StateDB] Active: %s", dbPath)
+			}
+		}
+	}
+
 	// Pre-populate cache at startup to improve Plex scan performance.
 	cacheBuilder := NewStartupCacheBuilder(source, metaCache, logger)
 	cacheBuilder.Start()
@@ -2890,6 +2923,11 @@ func main() {
 
 	globalTorrentRemover = NewTorrentRemover(nativeBridge, logger)
 	globalSyncCacheManager = NewSyncCacheManager(GetStateDir(), logger)
+
+	// V1.7.1: Wire up StateDB to sync cache manager (after it's created)
+	if stateDB != nil {
+		globalSyncCacheManager.SetDB(stateDB)
+	}
 
 	if err := globalSyncCacheManager.LoadCachesFromDisk(); err != nil {
 		logger.Printf("WARNING: Failed to load sync caches from disk: %v", err)

@@ -2,16 +2,16 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
+
+	"gostream/internal/metadb"
 )
 
-// EpisodeEntry matches the Python registry format
+// EpisodeEntry matches the Python registry format.
 type EpisodeEntry struct {
 	QualityScore int    `json:"quality_score"`
 	Hash         string `json:"hash"`
@@ -21,18 +21,24 @@ type EpisodeEntry struct {
 }
 
 var registryMutex sync.Mutex
+var registryDB *metadb.DB
 
-// GetRegistryPath returns the path to tv_episode_registry.json
+// SetRegistryDB enables SQLite persistence for the episode registry.
+func SetRegistryDB(db *metadb.DB) {
+	registryMutex.Lock()
+	defer registryMutex.Unlock()
+	registryDB = db
+}
+
+// GetRegistryPath returns the path to tv_episode_registry.json.
 func GetRegistryPath() string {
 	return filepath.Join(GetStateDir(), "tv_episode_registry.json")
 }
 
-// StartRegistryWatchdog runs the self-healing check at startup and then every 24 hours
+// StartRegistryWatchdog runs the self-healing check at startup and then every 24 hours.
 func StartRegistryWatchdog(stopChan chan struct{}) {
-	// 1. Initial check at startup
 	SyncRegistryWithDisk()
 
-	// 2. Periodic check every 24 hours
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
 
@@ -49,11 +55,53 @@ func StartRegistryWatchdog(stopChan chan struct{}) {
 	}
 }
 
-// SyncRegistryWithDisk cleans up orphaned entries in tv_episode_registry.json (V1.4.6-Fix)
+// SyncRegistryWithDisk cleans up orphaned entries.
+// With StateDB: deletes entries whose file_path no longer exists via SQL.
+// Without StateDB: falls back to JSON read-filter-write cycle.
 func SyncRegistryWithDisk() {
 	registryMutex.Lock()
 	defer registryMutex.Unlock()
 
+	if registryDB != nil {
+		syncRegistryWithDB()
+		return
+	}
+	syncRegistryWithJSON()
+}
+
+func syncRegistryWithDB() {
+	path := GetRegistryPath()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return
+	}
+
+	logger.Printf("[Registry] Starting self-healing check (StateDB): %s", path)
+
+	entries, err := registryDB.AllEpisodes()
+	if err != nil {
+		logger.Printf("[Registry] ERROR: could not read episodes from DB: %v", err)
+		return
+	}
+
+	removed := 0
+	for _, entry := range entries {
+		if _, err := os.Stat(entry.FilePath); err != nil {
+			if err := registryDB.DeleteEpisode(entry.EpisodeKey); err != nil {
+				logger.Printf("[Registry] ERROR: failed to delete episode %s: %v", entry.EpisodeKey, err)
+			} else {
+				removed++
+			}
+		}
+	}
+
+	if removed == 0 {
+		logger.Printf("[Registry] Audit complete: 0 ghost entries found (Total: %d)", len(entries))
+	} else {
+		logger.Printf("[Registry] Self-Healing (StateDB): Purged %d ghost entries. Remaining: %d", removed, len(entries)-removed)
+	}
+}
+
+func syncRegistryWithJSON() {
 	path := GetRegistryPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return
@@ -61,20 +109,18 @@ func SyncRegistryWithDisk() {
 
 	logger.Printf("[Registry] Starting self-healing check: %s", path)
 
-	// 1. Read Registry
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		logger.Printf("[Registry] ERROR: could not read registry: %v", err)
 		return
 	}
 
 	var registry map[string]EpisodeEntry
-	if err := json.Unmarshal(data, &registry); err != nil {
+	if err := unmarshalJSON(data, &registry); err != nil {
 		logger.Printf("[Registry] ERROR: could not parse registry: %v", err)
 		return
 	}
 
-	// 2. Filter missing files
 	initialCount := len(registry)
 	newRegistry := make(map[string]EpisodeEntry)
 	removed := 0
@@ -92,7 +138,6 @@ func SyncRegistryWithDisk() {
 		return
 	}
 
-	// 3. Save Registry (with lock to be Python-friendly)
 	if err := saveRegistryLocked(path, newRegistry); err != nil {
 		logger.Printf("[Registry] ERROR: could not save cleaned registry: %v", err)
 	} else {
@@ -100,23 +145,45 @@ func SyncRegistryWithDisk() {
 	}
 }
 
-// RemoveFromRegistry removes a specific file path from the registry (V1.4.6-Fix)
+// RemoveFromRegistry removes a specific file path from the registry.
 func RemoveFromRegistry(filePath string) {
 	registryMutex.Lock()
 	defer registryMutex.Unlock()
 
+	if registryDB != nil {
+		removeFromRegistryDB(filePath)
+		return
+	}
+	removeFromRegistryJSON(filePath)
+}
+
+func removeFromRegistryDB(filePath string) {
+	entries, err := registryDB.EpisodesByFilePath(filePath)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if err := registryDB.DeleteEpisode(entry.EpisodeKey); err != nil {
+			logger.Printf("[Registry] ERROR: failed to delete episode %s: %v", entry.EpisodeKey, err)
+		} else {
+			logger.Printf("[Registry] Real-time (StateDB): Removed deleted file from registry: %s", filepath.Base(filePath))
+		}
+	}
+}
+
+func removeFromRegistryJSON(filePath string) {
 	path := GetRegistryPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return
 	}
 
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
 
 	var registry map[string]EpisodeEntry
-	if err := json.Unmarshal(data, &registry); err != nil {
+	if err := unmarshalJSON(data, &registry); err != nil {
 		return
 	}
 
@@ -135,28 +202,24 @@ func RemoveFromRegistry(filePath string) {
 	}
 }
 
-// saveRegistryLocked saves the registry using syscall.Flock to coordinate with Python scripts
+// saveRegistryLocked saves the registry using syscall.Flock (JSON fallback).
 func saveRegistryLocked(path string, registry map[string]EpisodeEntry) error {
-	// 1. Open file
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	// 2. Lock file (Exclusive, blocking) - Matches Python's fcntl.flock(f, fcntl.LOCK_EX)
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("could not acquire lock: %v", err)
+		return err
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
-	// 3. Encode JSON
-	data, err := json.MarshalIndent(registry, "", "  ")
+	data, err := json.Marshal(registry)
 	if err != nil {
 		return err
 	}
 
-	// 4. Write (Truncate then write)
 	if err := f.Truncate(0); err != nil {
 		return err
 	}
