@@ -12,7 +12,6 @@ set "TEMPLATES_DIR=%SCRIPT_DIR%templates"
 
 set "DEFAULT_BASE=%USERPROFILE%\Documents\Docker Stuff"
 set "DEFAULT_STACKS=%USERPROFILE%\Documents\Docker Stuff\Dockge\stacks"
-set "MYDEPLOY_DEFAULT_STACKS=B:\Documents\Docker Stuff\Dockge\stacks"
 
 set "FLAVOR="
 set "MODE="
@@ -200,16 +199,26 @@ if "%NON_INTERACTIVE%"=="1" (
   )
 )
 
-if /i not "%FLAVOR%"=="plex" if /i not "%FLAVOR%"=="jellyfin" (
-  echo ERROR: Invalid flavor: %FLAVOR%
-  goto bad_args
-)
+ if /i not "%FLAVOR%"=="plex" if /i not "%FLAVOR%"=="jellyfin" (
+   echo ERROR: Invalid flavor: %FLAVOR%
+   goto bad_args
+ )
 
-if "%USE_MYDEPLOY%"=="1" (
-  set "MYDEPLOY_STACKS_ROOT=!MYDEPLOY_DEFAULT_STACKS!"
-  set "MYDEPLOY_STACK_DIR=!MYDEPLOY_STACKS_ROOT!\gostream-plex"
-  call :materialize_mydeploy_stack "!EXISTING_COMPOSE_FILE!" "!MYDEPLOY_STACK_DIR!" "!REPO_ROOT!" MYDEPLOY_COMPOSE_FILE
-  if errorlevel 1 exit /b !ERRORLEVEL!
+ REM -------------------------
+ REM Preflight: stop Plex (Windows + container) before any deploy/generation
+ REM - Must run even when --no-deploy is specified
+ REM -------------------------
+ call :preflight_stop_plex
+ if errorlevel 1 exit /b !ERRORLEVEL!
+
+ if "%USE_MYDEPLOY%"=="1" (
+   REM my-deploy stack root: use --stacks if provided, else DEFAULT_STACKS (no prompting)
+   set "MYDEPLOY_STACKS_ROOT=%STACKS_ROOT_WIN%"
+   if "!MYDEPLOY_STACKS_ROOT!"=="" set "MYDEPLOY_STACKS_ROOT=%DEFAULT_STACKS%"
+   call :fullpath "!MYDEPLOY_STACKS_ROOT!" MYDEPLOY_STACKS_ROOT
+   set "MYDEPLOY_STACK_DIR=!MYDEPLOY_STACKS_ROOT!\gostream-plex"
+   call :materialize_mydeploy_stack "!EXISTING_COMPOSE_FILE!" "!MYDEPLOY_STACK_DIR!" "!REPO_ROOT!" MYDEPLOY_COMPOSE_FILE
+   if errorlevel 1 exit /b !ERRORLEVEL!
 
   echo.
   echo my-deploy mode selected.
@@ -217,13 +226,13 @@ if "%USE_MYDEPLOY%"=="1" (
   echo   Dockerfile file: !EXISTING_DOCKERFILE!
   echo   Dockge stack   : !MYDEPLOY_STACK_DIR!
   echo   Compose file   : !MYDEPLOY_COMPOSE_FILE!
-  if "%NO_DEPLOY%"=="1" (
-    echo NOTE: --no-deploy specified; skipping docker compose up.
-    exit /b 0
-  )
-  call :deploy_existing_compose "!MYDEPLOY_COMPOSE_FILE!"
-  exit /b !ERRORLEVEL!
-)
+   if "%NO_DEPLOY%"=="1" (
+     echo NOTE: --no-deploy specified; skipping docker compose up.
+     exit /b 0
+   )
+   call :deploy_existing_compose "!MYDEPLOY_COMPOSE_FILE!"
+   exit /b !ERRORLEVEL!
+ )
 
 if not exist "%TEMPLATES_DIR%\compose.yaml.tmpl" (
   echo ERROR: Missing templates. Expected: %TEMPLATES_DIR%\compose.yaml.tmpl
@@ -290,23 +299,27 @@ if not exist "%CONFIG_PATH%" (
   set "CONFIG_CREATED=1"
 )
 
-REM Patch config.json + read internal metrics port
-call :patch_config "%CONFIG_PATH%" "%BASE_DIR_WIN%\gostream-mkv-real\backup" "%FLAVOR%"
-if errorlevel 1 (
-  echo ERROR: Failed to patch/read config.json at %CONFIG_PATH%
-  exit /b !ERRORLEVEL!
-)
-if "%GOSTREAM_METRICS_PORT%"=="" (
-  echo ERROR: Failed to determine internal metrics port from config.json
-  exit /b 1
-)
+ REM Patch config.json + read internal metrics port
+ call :patch_config "%CONFIG_PATH%" "%BASE_DIR_WIN%\gostream-mkv-real\backup" "%FLAVOR%"
+ if errorlevel 1 (
+   echo ERROR: Failed to patch/read config.json at %CONFIG_PATH%
+   exit /b !ERRORLEVEL!
+ )
+ if "%GOSTREAM_METRICS_PORT%"=="" (
+   echo ERROR: Failed to determine internal metrics port from config.json
+   exit /b 1
+ )
 
-REM Pick free host ports (Docker containers only)
-call :select_ports "%GOSTREAM_METRICS_PORT%"
-if errorlevel 1 (
-  echo ERROR: Failed selecting host ports from Docker container bindings.
-  exit /b !ERRORLEVEL!
-)
+ REM Fixed host ports (no auto-selection)
+ set "MEDIA_HOST_PORT=32302"
+ set "GOSTORM_HOST_PORT=8090"
+ set "HEALTH_HOST_PORT=8095"
+ set "METRICS_HOST_PORT=8096"
+ if /i "%FLAVOR%"=="plex" (
+   set "MEDIA_CONTAINER_PORT=32400"
+ ) else (
+   set "MEDIA_CONTAINER_PORT=8096"
+ )
 
 REM Normalize BASE_DIR and STACK_DIR for .env (forward slashes)
 call :norm_fwd "%BASE_DIR_WIN%" BASE_DIR_FWD
@@ -365,13 +378,12 @@ if "%USE_EXISTING_FILES%"=="1" (
   echo Source mode        : built-in templates ^(docker-windows/templates^)
 )
 echo.
-echo Ports (host -> container):
-echo   PLEX_HOST_PORT     : %PLEX_HOST_PORT% ^> 32400
-echo   JELLYFIN_HOST_PORT : %JELLYFIN_HOST_PORT% ^> 8096
-echo   GOSTORM_HOST_PORT  : %GOSTORM_HOST_PORT% ^> 8090
-echo   HEALTH_HOST_PORT   : %HEALTH_HOST_PORT% ^> 8095
-echo   METRICS_HOST_PORT  : %METRICS_HOST_PORT% ^> %GOSTREAM_METRICS_PORT%
-echo   Internal metrics   : %GOSTREAM_METRICS_PORT%
+ echo Ports (host -> container):
+ echo   MEDIA_SERVER       : %MEDIA_HOST_PORT% ^> %MEDIA_CONTAINER_PORT%
+ echo   GOSTORM_API        : %GOSTORM_HOST_PORT% ^> 8090
+ echo   HEALTH_MONITOR     : %HEALTH_HOST_PORT% ^> 8095
+ echo   GOSTREAM_METRICS   : %METRICS_HOST_PORT% ^> %GOSTREAM_METRICS_PORT%
+  echo   Internal metrics   : %GOSTREAM_METRICS_PORT%
 echo.
 echo config.json:
 if "%CONFIG_CREATED%"=="1" (echo   - created from config.json.example) else (echo   - existed)
@@ -427,11 +439,142 @@ echo.
 echo Run with --help for usage.
 exit /b 2
 
-:ensure_dir
-set "_d=%~1"
-if "%_d%"=="" exit /b 1
-if not exist "%_d%" mkdir "%_d%" >nul 2>&1
+REM -------------------------
+REM Preflight helpers
+REM -------------------------
+
+:preflight_stop_plex
+REM Stop Docker containers (if they exist)
+call :stop_docker_container_if_exists "gostream-plex"
+call :stop_docker_container_if_exists "gostream-jellyfin"
+
+REM Stop Windows Plex Media Server process
+call :stop_windows_plex_media_server
+if errorlevel 1 exit /b !ERRORLEVEL!
+
+REM Verify fixed ports are now free (abort; do not auto-change)
+call :assert_fixed_ports_free
+if errorlevel 1 exit /b !ERRORLEVEL!
+
 exit /b 0
+
+:assert_fixed_ports_free
+set "_portsFailed=0"
+call :assert_port_free 32302
+if errorlevel 1 set "_portsFailed=1"
+call :assert_port_free 8090
+if errorlevel 1 set "_portsFailed=1"
+call :assert_port_free 8095
+if errorlevel 1 set "_portsFailed=1"
+call :assert_port_free 8096
+if errorlevel 1 set "_portsFailed=1"
+
+if "%_portsFailed%"=="1" (
+  echo.
+  echo ERROR: One or more required fixed ports are in use. Aborting.
+  exit /b 3
+)
+
+exit /b 0
+
+:assert_port_free
+set "_port=%~1"
+if "%_port%"=="" exit /b 1
+
+set "__CHECK_PORT=%_port%"
+set "_found=0"
+ for /f "usebackq delims=" %%L in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $port=[int]$env:__CHECK_PORT; $owningPids=@(); $haveCmd = (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) -ne $null; if($haveCmd){ try { $owningPids = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique) } catch { $owningPids=@() } } else { $owningPids=@(); try { netstat -ano -p TCP | ForEach-Object { $line=$_.Trim(); if($line -match '^TCP\\s+([^\\s]+)\\s+([^\\s]+)\\s+LISTENING\\s+(\\d+)$'){ $local=$Matches[1]; $opidNum=[int]$Matches[3]; if($local -match (':'+$port+'$') -or $local -match ('\\]:'+ $port +'$')){ $owningPids += $opidNum } } } } catch { $owningPids=@() }; $owningPids = @($owningPids | Sort-Object -Unique) }; if(-not $owningPids -or $owningPids.Count -eq 0){ exit 0 }; foreach($opidNum in $owningPids){ $procObj = Get-Process -Id $opidNum -ErrorAction SilentlyContinue; $name = if($procObj){$procObj.ProcessName}else{'<unknown>'}; $path = '<unknown>'; try { if($procObj -and $procObj.Path){ $path=$procObj.Path } } catch { $path='<access denied>' }; Write-Output ('INUSE|'+$port+'|'+$opidNum+'|'+$name+'|'+$path) }; exit 0 }"`) do (
+  set "_found=1"
+  for /f "tokens=2-5 delims=|" %%P in ("%%L") do (
+    echo Port %%P is in use ^> PID %%Q ^> %%R ^> %%S
+  )
+)
+set "__CHECK_PORT="
+
+if "%_found%"=="1" exit /b 1
+exit /b 0
+
+:stop_docker_container_if_exists
+set "_name=%~1"
+if "%_name%"=="" exit /b 0
+
+where docker >nul 2>&1
+if errorlevel 1 (
+  REM Allow generation without docker installed
+  exit /b 0
+)
+
+docker container inspect "%_name%" >nul 2>&1
+if errorlevel 1 exit /b 0
+
+echo.
+echo [preflight] Stopping Docker container "%_name%" (if running)...
+docker stop -t 10 "%_name%" >nul 2>&1
+
+exit /b 0
+
+:is_admin
+net session >nul 2>&1
+if errorlevel 1 (
+  exit /b 1
+)
+exit /b 0
+
+:stop_windows_plex_media_server
+REM Try non-elevated graceful stop first, then force kill.
+call :_stop_windows_plex_media_server_non_elevated
+set "_rc=%ERRORLEVEL%"
+if "%_rc%"=="0" exit /b 0
+
+if "%_rc%"=="5" (
+  REM Access denied - request elevation and retry.
+  call :is_admin
+  if not errorlevel 1 (
+    echo.
+    echo ERROR: Plex Media Server process could not be stopped even as admin.
+    exit /b 1
+  )
+
+  echo.
+  echo [preflight] Plex Media Server requires admin privileges to stop.
+  echo [preflight] A UAC prompt may appear; approve to continue.
+  call :_stop_windows_plex_media_server_elevated
+  if errorlevel 1 (
+    echo.
+    echo ERROR: Elevated Plex stop failed (UAC cancelled or access denied).
+    exit /b 1
+  )
+
+  REM Re-check (non-elevated) to confirm it is gone.
+  call :_stop_windows_plex_media_server_non_elevated
+  if errorlevel 1 (
+    echo.
+    echo ERROR: Plex Media Server is still running after elevated stop attempt.
+    exit /b 1
+  )
+  exit /b 0
+)
+
+echo.
+echo ERROR: Failed to stop Windows Plex Media Server process.
+exit /b 1
+
+:_stop_windows_plex_media_server_non_elevated
+set "__PLEX_PS_NAME=Plex Media Server"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $n=$env:__PLEX_PS_NAME; $procs=@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -ieq $n }); if($procs.Count -eq 0){ exit 0 }; foreach($p in $procs){ try { [void]$p.CloseMainWindow() } catch {} }; Start-Sleep -Seconds 10; $procs=@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -ieq $n }); if($procs.Count -eq 0){ exit 0 }; try { $procs | Stop-Process -Force -ErrorAction Stop } catch { if($_.Exception -is [System.ComponentModel.Win32Exception] -and $_.Exception.NativeErrorCode -eq 5){ exit 5 }; exit 1 }; Start-Sleep -Milliseconds 250; $procs=@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -ieq $n }); if($procs.Count -eq 0){ exit 0 }; exit 2 }" >nul
+set "_rc=%ERRORLEVEL%"
+set "__PLEX_PS_NAME="
+exit /b %_rc%
+
+:_stop_windows_plex_media_server_elevated
+set "__PLEX_PS_NAME=Plex Media Server"
+set "__PLEX_STOP_CMD=& { $n=$env:__PLEX_PS_NAME; $procs=@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -ieq $n }); if($procs.Count -eq 0){ exit 0 }; foreach($p in $procs){ try { [void]$p.CloseMainWindow() } catch {} }; Start-Sleep -Seconds 10; $procs=@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -ieq $n }); if($procs.Count -eq 0){ exit 0 }; $procs | Stop-Process -Force -ErrorAction Stop; exit 0 }"
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $cmd=$env:__PLEX_STOP_CMD; try { $p = Start-Process -FilePath 'powershell' -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command', $cmd); exit $p.ExitCode } catch { exit 1 } }" >nul
+
+set "__PLEX_PS_NAME="
+set "__PLEX_STOP_CMD="
+exit /b %ERRORLEVEL%
 
 
 :prompt_value
@@ -605,7 +748,7 @@ set "__CFG=%_cfg%"
 set "__BAK=%_backupDir%"
 set "__FLAVOR=%_flavor%"
 
-for /f "usebackq tokens=1* delims==" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $cfg=$env:__CFG; $backupDir=$env:__BAK; $flavor=$env:__FLAVOR; if(-not (Test-Path -LiteralPath $cfg)) { throw 'config.json missing' }; $raw=Get-Content -Raw -LiteralPath $cfg; $obj=$raw | ConvertFrom-Json; $changed=$false; if($null -eq $obj.physical_source_path -or $obj.physical_source_path -ne '/gostream/source'){ $obj.physical_source_path='/gostream/source'; $changed=$true }; if($null -eq $obj.fuse_mount_path -or $obj.fuse_mount_path -ne '/gostream/mount'){ $obj.fuse_mount_path='/gostream/mount'; $changed=$true }; if($flavor -eq 'jellyfin'){ $desiredMetrics=8097; if($null -eq $obj.metrics_port -or [int]$obj.metrics_port -ne $desiredMetrics){ $obj.metrics_port=$desiredMetrics; $changed=$true } }; if($flavor -eq 'plex'){ if($null -eq $obj.metrics_port){ $obj.metrics_port=8096; $changed=$true } }; $bak=''; if($changed -and $flavor -eq 'jellyfin'){ New-Item -ItemType Directory -Force -Path $backupDir | Out-Null; $ts=Get-Date -Format 'yyyyMMdd-HHmmss'; $bak=Join-Path $backupDir ('config.json.'+$ts+'.bak'); Copy-Item -LiteralPath $cfg -Destination $bak -Force }; if($changed){ ($obj | ConvertTo-Json -Depth 64) | Set-Content -LiteralPath $cfg -Encoding UTF8 }; Write-Output ('CONFIG_CHANGED=' + ($(if($changed){'1'}else{'0'}))); Write-Output ('CONFIG_BACKUP=' + $bak); Write-Output ('GOSTREAM_METRICS_PORT=' + ([int]$obj.metrics_port)) }"`) do (
+ for /f "usebackq tokens=1* delims==" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $cfg=$env:__CFG; $backupDir=$env:__BAK; $flavor=$env:__FLAVOR; if(-not (Test-Path -LiteralPath $cfg)) { throw 'config.json missing' }; $raw=Get-Content -Raw -LiteralPath $cfg; $obj=$raw | ConvertFrom-Json; $changed=$false; if($null -eq $obj.physical_source_path -or $obj.physical_source_path -ne '/gostream/source'){ $obj.physical_source_path='/gostream/source'; $changed=$true }; if($null -eq $obj.fuse_mount_path -or $obj.fuse_mount_path -ne '/gostream/mount'){ $obj.fuse_mount_path='/gostream/mount'; $changed=$true }; if($flavor -eq 'jellyfin'){ $desiredMetrics=8097; if($null -eq $obj.metrics_port -or [int]$obj.metrics_port -ne $desiredMetrics){ $obj.metrics_port=$desiredMetrics; $changed=$true } }; if($flavor -eq 'plex'){ $desiredMetrics=8096; if($null -eq $obj.metrics_port -or [int]$obj.metrics_port -ne $desiredMetrics){ $obj.metrics_port=$desiredMetrics; $changed=$true } }; $bak=''; if($changed -and $flavor -eq 'jellyfin'){ New-Item -ItemType Directory -Force -Path $backupDir | Out-Null; $ts=Get-Date -Format 'yyyyMMdd-HHmmss'; $bak=Join-Path $backupDir ('config.json.'+$ts+'.bak'); Copy-Item -LiteralPath $cfg -Destination $bak -Force }; if($changed){ ($obj | ConvertTo-Json -Depth 64) | Set-Content -LiteralPath $cfg -Encoding UTF8 }; Write-Output ('CONFIG_CHANGED=' + ($(if($changed){'1'}else{'0'}))); Write-Output ('CONFIG_BACKUP=' + $bak); Write-Output ('GOSTREAM_METRICS_PORT=' + ([int]$obj.metrics_port)) }"`) do (
   if /i "%%A"=="CONFIG_CHANGED" set "CONFIG_CHANGED=%%B"
   if /i "%%A"=="CONFIG_BACKUP" set "CONFIG_BACKUP=%%B"
   if /i "%%A"=="GOSTREAM_METRICS_PORT" set "GOSTREAM_METRICS_PORT=%%B"
@@ -615,21 +758,7 @@ set "__CFG="
 set "__BAK="
 set "__FLAVOR="
 
-exit /b 0
-
-:select_ports
-set "_internal=%~1"
-if "%_internal%"=="" exit /b 1
-
-set "__INTERNAL=%_internal%"
-
-for /f "usebackq tokens=1* delims==" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $internal=[int]$env:__INTERNAL; $used = New-Object System.Collections.Generic.HashSet[int]; $ids = @(); try { $ids = docker ps -aq 2>$null } catch { $ids=@() }; foreach($id in $ids){ try { $j = docker inspect $id | ConvertFrom-Json } catch { continue }; if($null -eq $j -or $j.Count -lt 1){ continue }; $ports = $j[0].NetworkSettings.Ports; if($null -eq $ports){ continue }; foreach($prop in $ports.PSObject.Properties){ $bindings = $prop.Value; if($null -eq $bindings){ continue }; foreach($b in $bindings){ if($null -ne $b.HostPort -and $b.HostPort -match '^[0-9]+$'){ [void]$used.Add([int]$b.HostPort) } } } }; $reserved = New-Object System.Collections.Generic.HashSet[int]; function NextFree([int]$start){ $p=$start; while($used.Contains($p) -or $reserved.Contains($p)){ $p++ }; [void]$reserved.Add($p); return $p }; $plex = NextFree 32400; $jelly = NextFree 8096; $gostorm = NextFree 8090; $health = NextFree 8095; $metrics = NextFree $internal; Write-Output ('PLEX_HOST_PORT='+$plex); Write-Output ('JELLYFIN_HOST_PORT='+$jelly); Write-Output ('GOSTORM_HOST_PORT='+$gostorm); Write-Output ('HEALTH_HOST_PORT='+$health); Write-Output ('METRICS_HOST_PORT='+$metrics) }"`) do (
-  set "%%A=%%B"
-)
-
-set "__INTERNAL="
-
-exit /b 0
+ exit /b 0
 
 :generate_stack
 set "_flavor=%~1"
@@ -781,26 +910,23 @@ if exist "%REPO_ROOT%\ai" (
   )
 )
 
-REM Render .env (concrete values)
-echo [stack] Writing .env
-(
-  echo BASE_DIR=%_baseFwd%
-  echo STACK_DIR=%_stackFwd%
-  echo CONTAINER_NAME=%_container%
-  echo.
-  echo PLEX_HOST_PORT=%PLEX_HOST_PORT%
-  echo JELLYFIN_HOST_PORT=%JELLYFIN_HOST_PORT%
-  echo GOSTORM_HOST_PORT=%GOSTORM_HOST_PORT%
-  echo HEALTH_HOST_PORT=%HEALTH_HOST_PORT%
-  echo METRICS_HOST_PORT=%METRICS_HOST_PORT%
-  echo.
-  echo GOSTREAM_METRICS_PORT=%GOSTREAM_METRICS_PORT%
-  echo.
-  echo PUID=%PUID%
-  echo PGID=%PGID%
-  echo TZ=%TZ%
-  echo PLEX_CLAIM=%PLEX_CLAIM%
-) > "%_stackDir%\.env"
+ REM Render .env (concrete values)
+ echo [stack] Writing .env
+ (
+   echo BASE_DIR=%_baseFwd%
+   echo STACK_DIR=%_stackFwd%
+   echo CONTAINER_NAME=%_container%
+   echo.
+   echo MEDIA_HOST_PORT=%MEDIA_HOST_PORT%
+   echo MEDIA_CONTAINER_PORT=%MEDIA_CONTAINER_PORT%
+   echo.
+   echo GOSTREAM_METRICS_PORT=%GOSTREAM_METRICS_PORT%
+   echo.
+   echo PUID=%PUID%
+   echo PGID=%PGID%
+   echo TZ=%TZ%
+   echo PLEX_CLAIM=%PLEX_CLAIM%
+ ) > "%_stackDir%\.env"
 
 exit /b 0
 
@@ -882,10 +1008,7 @@ exit /b 0
 
 :deploy_existing_compose
 set "_composePath=%~1"
-call :prepare_compose_autoports "%_composePath%" EFFECTIVE_COMPOSE_PATH
-if errorlevel 1 exit /b !ERRORLEVEL!
-
-for %%I in ("%EFFECTIVE_COMPOSE_PATH%") do (
+for %%I in ("%_composePath%") do (
   set "_composeDir=%%~dpI"
   set "_composeFile=%%~nxI"
 )
@@ -909,44 +1032,6 @@ if not "%_rc%"=="0" (
   exit /b %_rc%
 )
 
-exit /b 0
-
-:prepare_compose_autoports
-set "_srcCompose=%~1"
-set "_outVar=%~2"
-
-for %%I in ("%_srcCompose%") do (
-  set "_composeDir=%%~dpI"
-  set "_composeBase=%%~nI"
-)
-set "_autoCompose=%_composeDir%%_composeBase%.autoports.yaml"
-set "_portScript=%SCRIPT_DIR%scripts\prepare-compose-autoports.ps1"
-
-set "_AUTO_COMPOSE_PATH="
-set "_AUTO_CHANGED=0"
-
-if not exist "%_portScript%" (
-  echo ERROR: Missing auto-port script: %_portScript%
-  exit /b 1
-)
-
-for /f "usebackq tokens=1* delims==" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%_portScript%" -SourceCompose "%_srcCompose%" -DestCompose "%_autoCompose%"`) do (
-  if /i "%%A"=="AUTO_COMPOSE" set "_AUTO_COMPOSE_PATH=%%B"
-  if /i "%%A"=="AUTO_CHANGED" set "_AUTO_CHANGED=%%B"
-  if /i "%%A"=="AUTO_PORT_CHANGE" echo   [auto-port] %%B
-)
-
-if "%_AUTO_COMPOSE_PATH%"=="" (
-  echo ERROR: Failed to prepare compose file with auto-port selection.
-  exit /b 1
-)
-
-if "%_AUTO_CHANGED%"=="1" (
-  echo Auto-port override file generated:
-  echo   %_AUTO_COMPOSE_PATH%
-)
-
-set "%_outVar%=%_AUTO_COMPOSE_PATH%"
 exit /b 0
 
 :materialize_mydeploy_stack
@@ -976,4 +1061,11 @@ if "%_MAT_COMPOSE%"=="" (
 )
 
 set "%_outVar%=%_MAT_COMPOSE%"
+exit /b 0
+
+
+:ensure_dir
+set "_d=%~1"
+if "%_d%"=="" exit /b 1
+if not exist "%_d%" mkdir "%_d%" >nul 2>&1
 exit /b 0

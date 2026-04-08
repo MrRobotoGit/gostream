@@ -1598,8 +1598,36 @@ class GoStormTV:
             # Protect existing files from cleanup (for shows now filtered by age/genre)
             self._populate_registry_from_existing()
 
-            # Discover shows
-            shows = self.discover_shows()
+            request_ids_env = (os.getenv('GOSTREAM_REQUEST_TV_TMDB_IDS') or '').strip()
+            if request_ids_env:
+                raw_ids = [x.strip() for x in request_ids_env.split(',') if x.strip()]
+                ids: List[int] = []
+                for x in raw_ids:
+                    try:
+                        n = int(x)
+                    except Exception:
+                        continue
+                    if n > 0:
+                        ids.append(n)
+                seen = set()
+                ids_dedup: List[int] = []
+                for n in ids:
+                    if n in seen:
+                        continue
+                    seen.add(n)
+                    ids_dedup.append(n)
+                ids_dedup = ids_dedup[:50]
+
+                shows = []
+                for tmdb_id in ids_dedup:
+                    details = self._fetch_show_details(tmdb_id)
+                    if not details:
+                        self.log("WARN", f"TMDB show lookup failed: {tmdb_id}")
+                        continue
+                    shows.append(details)
+                self.log("INFO", f"Request-only mode: processing {len(shows)} TMDB tv ids")
+            else:
+                shows = self.discover_shows()
             if not shows:
                 self.log("WARN", "No shows discovered")
                 return False

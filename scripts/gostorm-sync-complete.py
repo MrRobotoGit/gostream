@@ -3491,8 +3491,50 @@ class GoStormSync:
         """
         self.log("INFO", "=== PROCESSING MOVIES ===")
         
-        # Get movies from TMDB
-        movie_data = self.get_tmdb_latest_movies()
+        request_ids_env = (os.getenv('GOSTREAM_REQUEST_MOVIE_TMDB_IDS') or '').strip()
+        if request_ids_env:
+            raw_ids = [x.strip() for x in request_ids_env.split(',') if x.strip()]
+            ids: List[int] = []
+            for x in raw_ids:
+                try:
+                    n = int(x)
+                except Exception:
+                    continue
+                if n > 0:
+                    ids.append(n)
+            seen = set()
+            ids_dedup: List[int] = []
+            for n in ids:
+                if n in seen:
+                    continue
+                seen.add(n)
+                ids_dedup.append(n)
+            ids_dedup = ids_dedup[:50]
+            self.log("INFO", f"Request-only mode: processing {len(ids_dedup)} TMDB movie ids")
+
+            movie_data = []
+            for tmdb_id in ids_dedup:
+                resp = self.safe_curl(
+                    f"{self.TMDB_BASE_URL}/movie/{tmdb_id}",
+                    params={'api_key': self.TMDB_API_KEY, 'language': 'en-US'}
+                )
+                if not resp or resp.status_code != 200:
+                    self.log("WARN", f"TMDB movie lookup failed: {tmdb_id}")
+                    continue
+                try:
+                    d = resp.json() or {}
+                except Exception:
+                    d = {}
+                if not d.get('id'):
+                    continue
+                movie_data.append({
+                    'id': d.get('id'),
+                    'title': d.get('title') or d.get('original_title', ''),
+                    'original_title': d.get('original_title', ''),
+                    'imdb_id': d.get('imdb_id'),
+                })
+        else:
+            movie_data = self.get_tmdb_latest_movies()
         if not movie_data:
             self.log("WARN", "No movie data from TMDB")
             return 0
@@ -5427,11 +5469,18 @@ class GoStormSync:
         self.log("INFO", "🎬 GoStorm Sync Starting (v1.5.4-Prowlarr) - TMDB → GoStorm integration")
         self.log("INFO", f"Start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # Clean up unreferenced torrents BEFORE processing new content
+        request_ids_env = (os.getenv('GOSTREAM_REQUEST_MOVIE_TMDB_IDS') or '').strip()
+        if request_ids_env:
+            total_movie_files = self.process_movies()
+            self.log_success(f"Request-only movies sync finished: {total_movie_files} files created")
+            movies_lib_id = _cfg.get('plex', {}).get('library_id', 0)
+            if movies_lib_id:
+                self.notify_plex(movies_lib_id)
+            return True
+
         self.log("INFO", "=== CLEANUP PHASE ====")
         self._prune_unreferenced_torrents()
 
-        # Process movies
         total_movie_files = self.process_movies()
 
         # ============================================================

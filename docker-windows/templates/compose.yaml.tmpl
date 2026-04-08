@@ -21,16 +21,21 @@ services:
     security_opt:
       - apparmor:unconfined
 
-    # Host port mappings (BAT must assign concrete host ports)
+    # Host port mappings (fixed; installer must abort on conflicts)
     ports:
-      # Media server (one image will actually listen; unused mappings are harmless)
-      - "${PLEX_HOST_PORT}:32400"
-      - "${JELLYFIN_HOST_PORT}:8096"
+      # Media server (Plex or Jellyfin) — fixed host port
+      # - Plex:     32302 -> 32400
+      # - Jellyfin: 32302 -> 8096
+      - "${MEDIA_HOST_PORT}:${MEDIA_CONTAINER_PORT}"
 
-      # GoStream / GoStorm
-      - "${GOSTORM_HOST_PORT}:8090"
-      - "${HEALTH_HOST_PORT}:8095"
-      - "${METRICS_HOST_PORT}:${GOSTREAM_METRICS_PORT}"
+      # GoStorm API (fixed)
+      - "8090:8090"
+
+      # Health monitor dashboard (fixed)
+      - "8095:8095"
+
+      # GoStream control/metrics/webhook (fixed host port; internal port from config.json)
+      - "8096:${GOSTREAM_METRICS_PORT}"
 
     environment:
       - MKV_PROXY_CONFIG_PATH=/config.json

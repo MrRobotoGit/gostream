@@ -18,6 +18,7 @@ import socket
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -28,7 +29,9 @@ import psutil
 import requests
 import urllib3
 from fastapi import FastAPI, Query, Request, File, Form
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
 
 
 def _load_gostream_config() -> dict:
@@ -95,10 +98,314 @@ WATCHLIST_SYNC_SCRIPT = os.path.join(_scripts_dir, 'plex-watchlist-sync.py')
 WATCHLIST_SYNC_LOG = os.path.join(LOGS_DIR, 'watchlist-sync.log')
 SCHEDULER_STATE_FILE = os.path.join(STATE_DIR, 'scheduler_state.json')
 
+REQUEST_PREFS_FILE = os.path.join(STATE_DIR, 'request_prefs.json')
+REQUESTS_DIR = os.path.join(STATE_DIR, 'requests')
+
 # TMDB API for movie info
 TMDB_API_KEY = _cfg.get('tmdb_api_key', '')
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w92"  # Small poster
+
+
+def _read_json_file(file_path: str) -> Optional[Any]:
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to read JSON: {file_path}: {e}")
+        return None
+
+
+def _atomic_write_json(file_path: str, data: Any) -> None:
+    parent = os.path.dirname(file_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp_path = f"{file_path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, file_path)
+
+
+def _model_dump(m: Any) -> Dict[str, Any]:
+    if hasattr(m, 'model_dump'):
+        return m.model_dump()
+    return m.dict()
+
+
+def _request_prefs_defaults() -> Dict[str, Any]:
+    return {
+        'audio_languages': [],
+        'subtitle_languages': [],
+        'require_multi_audio': False,
+        'require_multi_subs': False,
+    }
+
+
+def _sanitize_language_list(values: Any) -> List[str]:
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise ValueError('must be an array')
+    out: List[str] = []
+    for v in values:
+        if not isinstance(v, str):
+            continue
+        s = v.strip()
+        if not s:
+            continue
+        out.append(s)
+    seen = set()
+    deduped: List[str] = []
+    for s in out:
+        if s in seen:
+            continue
+        seen.add(s)
+        deduped.append(s)
+    return deduped[:20]
+
+
+def _validate_and_normalize_prefs(data: Any) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ValueError('body must be an object')
+    defaults = _request_prefs_defaults()
+    audio = _sanitize_language_list(data.get('audio_languages', defaults['audio_languages']))
+    subs = _sanitize_language_list(data.get('subtitle_languages', defaults['subtitle_languages']))
+    rma = data.get('require_multi_audio', defaults['require_multi_audio'])
+    rms = data.get('require_multi_subs', defaults['require_multi_subs'])
+    if not isinstance(rma, bool) or not isinstance(rms, bool):
+        raise ValueError('require_multi_audio/require_multi_subs must be boolean')
+    return {
+        'audio_languages': audio,
+        'subtitle_languages': subs,
+        'require_multi_audio': rma,
+        'require_multi_subs': rms,
+    }
+
+
+class PreferencesIn(BaseModel):
+    audio_languages: List[str] = Field(default_factory=list)
+    subtitle_languages: List[str] = Field(default_factory=list)
+    require_multi_audio: bool = False
+    require_multi_subs: bool = False
+
+
+class RequestExpandIn(BaseModel):
+    type: str
+    tmdb_id: int
+
+
+class RequestSubmitIn(BaseModel):
+    movie_tmdb_ids: List[int] = Field(default_factory=list)
+    tv_tmdb_ids: List[int] = Field(default_factory=list)
+
+
+def _clamp_int(v: Any, default: int, min_v: int, max_v: int) -> int:
+    try:
+        n = int(v)
+    except Exception:
+        n = default
+    if n < min_v:
+        return min_v
+    if n > max_v:
+        return max_v
+    return n
+
+
+def _sanitize_tmdb_ids(values: Any, max_n: int = 50) -> List[int]:
+    items: List[Any]
+    if values is None:
+        items = []
+    elif isinstance(values, str):
+        items = [x.strip() for x in values.split(',')]
+    elif isinstance(values, list):
+        items = values
+    else:
+        items = [values]
+
+    out: List[int] = []
+    for v in items:
+        try:
+            n = int(v)
+        except Exception:
+            continue
+        if n <= 0:
+            continue
+        out.append(n)
+
+    seen = set()
+    deduped: List[int] = []
+    for n in out:
+        if n in seen:
+            continue
+        seen.add(n)
+        deduped.append(n)
+    return deduped[:max_n]
+
+
+def _request_status_path(request_id: str) -> str:
+    return os.path.join(REQUESTS_DIR, request_id, 'status.json')
+
+
+def _write_request_status(request_id: str, status: Dict[str, Any]) -> None:
+    status['updated_at'] = datetime.now().isoformat()
+    _atomic_write_json(_request_status_path(request_id), status)
+
+
+def _is_safe_request_id(request_id: str) -> bool:
+    if not request_id or len(request_id) > 64:
+        return False
+    return re.fullmatch(r'[a-zA-Z0-9_-]+', request_id) is not None
+
+
+def _run_request_jobs(request_id: str, movie_tmdb_ids: List[int], tv_tmdb_ids: List[int]) -> None:
+    status = _read_json_file(_request_status_path(request_id)) or {}
+    try:
+        status.setdefault('jobs', {})
+        status.setdefault('errors', [])
+
+        base_env = os.environ.copy()
+
+        def run_one(job_key: str, script_path: str, log_name: str, env_var: str, ids: List[int]) -> bool:
+            if not ids:
+                status['jobs'][job_key] = {
+                    'state': 'skipped',
+                    'reason': 'no_ids',
+                }
+                _write_request_status(request_id, status)
+                return True
+
+            req_dir = os.path.dirname(_request_status_path(request_id))
+            os.makedirs(req_dir, exist_ok=True)
+            log_path = os.path.join(req_dir, log_name)
+
+            if not os.path.exists(script_path):
+                status['jobs'][job_key] = {
+                    'state': 'error',
+                    'error': 'script_not_found',
+                    'script': script_path,
+                }
+                status['state'] = 'error'
+                status['errors'].append(f"{job_key}: script not found")
+                _write_request_status(request_id, status)
+                return False
+
+            env = base_env.copy()
+            env[env_var] = ','.join(str(x) for x in ids)
+
+            status['state'] = 'running'
+            status['jobs'][job_key] = {
+                'state': 'starting',
+                'script': script_path,
+                'env': {env_var: env[env_var]},
+                'log': log_path,
+                'started_at': datetime.now().isoformat(),
+            }
+            _write_request_status(request_id, status)
+
+            with open(log_path, 'a', encoding='utf-8') as log_f:
+                proc = subprocess.Popen(
+                    ['python3', script_path],
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    env=env,
+                )
+
+                status['jobs'][job_key].update({'state': 'running', 'pid': proc.pid})
+                _write_request_status(request_id, status)
+
+                rc = proc.wait()
+                status['jobs'][job_key].update({
+                    'state': 'success' if rc == 0 else 'error',
+                    'returncode': rc,
+                    'finished_at': datetime.now().isoformat(),
+                })
+                if rc != 0:
+                    status['state'] = 'error'
+                    status['errors'].append(f"{job_key}: returncode {rc}")
+                    _write_request_status(request_id, status)
+                    return False
+
+                _write_request_status(request_id, status)
+                return True
+
+        ok_movies = run_one('movies', SYNC_SCRIPT, 'movies.log', 'GOSTREAM_REQUEST_MOVIE_TMDB_IDS', movie_tmdb_ids)
+        if not ok_movies:
+            return
+        ok_tv = run_one('tv', TV_SYNC_SCRIPT, 'tv.log', 'GOSTREAM_REQUEST_TV_TMDB_IDS', tv_tmdb_ids)
+        if not ok_tv:
+            return
+
+        if status.get('state') != 'error':
+            status['state'] = 'success'
+            status['finished_at'] = datetime.now().isoformat()
+            _write_request_status(request_id, status)
+    except Exception as e:
+        try:
+            status.setdefault('errors', [])
+            status['state'] = 'error'
+            status['errors'].append(str(e))
+            _write_request_status(request_id, status)
+        except Exception:
+            pass
+
+
+def _tmdb_poster_url(poster_path: Optional[str], size: str = 'w342') -> Optional[str]:
+    if not poster_path:
+        return None
+    return f"https://image.tmdb.org/t/p/{size}{poster_path}"
+
+
+def _tmdb_year(date_str: Optional[str]) -> Optional[int]:
+    if not date_str or len(date_str) < 4:
+        return None
+    try:
+        return int(date_str[:4])
+    except Exception:
+        return None
+
+
+def _tmdb_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not TMDB_API_KEY:
+        raise RuntimeError('TMDB_API_KEY not configured')
+    p: Dict[str, Any] = {'api_key': TMDB_API_KEY}
+    if params:
+        p.update(params)
+    url = f"{TMDB_BASE_URL}{path}"
+    r = requests.get(url, params=p, timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"TMDB HTTP {r.status_code}: {r.text[:200]}")
+    return r.json() or {}
+
+
+def _unified_movie(item: Dict[str, Any], reason: Optional[str] = None) -> Dict[str, Any]:
+    out = {
+        'type': 'movie',
+        'tmdb_id': item.get('id'),
+        'title': item.get('title') or item.get('original_title') or '',
+        'year': _tmdb_year(item.get('release_date')),
+        'poster': _tmdb_poster_url(item.get('poster_path')),
+    }
+    if reason is not None:
+        out['reason'] = reason
+    return out
+
+
+def _unified_tv(item: Dict[str, Any], reason: Optional[str] = None) -> Dict[str, Any]:
+    out = {
+        'type': 'tv',
+        'tmdb_id': item.get('id'),
+        'title': item.get('name') or item.get('original_name') or '',
+        'year': _tmdb_year(item.get('first_air_date')),
+        'poster': _tmdb_poster_url(item.get('poster_path')),
+    }
+    if reason is not None:
+        out['reason'] = reason
+    return out
 
 COLLECT_INTERVAL = 5  # seconds
 GOSTORM_HEALTH_INTERVAL = 15  # seconds between health checks
@@ -1542,6 +1849,17 @@ def scheduler_loop() -> None:
 
 app = FastAPI(title="Streaming Health Monitor", version="1.0.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:32302",
+        "http://127.0.0.1:32302",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
+
 
 @app.get("/favicon.ico")
 async def favicon():
@@ -1607,6 +1925,303 @@ async def api_health() -> JSONResponse:
         "active_torrents": health_data["active_torrents"],
         "preload": preload_data
     })
+
+
+@app.get("/api/preferences")
+async def api_get_preferences() -> JSONResponse:
+    data = _read_json_file(REQUEST_PREFS_FILE)
+    if data is None:
+        return JSONResponse(_request_prefs_defaults())
+    try:
+        prefs = _validate_and_normalize_prefs(data)
+    except Exception:
+        prefs = _request_prefs_defaults()
+    return JSONResponse(prefs)
+
+
+@app.put("/api/preferences")
+async def api_put_preferences(prefs: PreferencesIn) -> JSONResponse:
+    try:
+        normalized = _validate_and_normalize_prefs(_model_dump(prefs))
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _atomic_write_json(REQUEST_PREFS_FILE, normalized)
+    return JSONResponse(normalized)
+
+
+@app.get("/api/request/search")
+async def api_request_search(
+    q: str = Query(default=""),
+    types: str = Query(default="both"),
+    limit: int = Query(default=10),
+) -> JSONResponse:
+    q = (q or "").strip()
+    t = (types or "both").strip().lower()
+    limit_n = _clamp_int(limit, default=10, min_v=1, max_v=20)
+    if not q:
+        return JSONResponse({"results": []})
+    if t not in {"movie", "tv", "both"}:
+        return JSONResponse({"error": "types must be movie|tv|both"}, status_code=400)
+
+    ranked: List[Tuple[float, Dict[str, Any]]] = []
+    try:
+        if t in {"movie", "both"}:
+            resp = _tmdb_get(
+                "/search/movie",
+                params={"query": q, "page": 1, "include_adult": "false"},
+            )
+            for it in (resp.get("results") or [])[:20]:
+                ranked.append((float(it.get("popularity") or 0), _unified_movie(it)))
+
+        if t in {"tv", "both"}:
+            resp = _tmdb_get(
+                "/search/tv",
+                params={"query": q, "page": 1, "include_adult": "false"},
+            )
+            for it in (resp.get("results") or [])[:20]:
+                ranked.append((float(it.get("popularity") or 0), _unified_tv(it)))
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    results = [r for _, r in ranked][:limit_n]
+    return JSONResponse({"results": results})
+
+
+@app.get("/api/request/details")
+async def api_request_details(
+    type: str = Query(...),
+    id: int = Query(...),
+) -> JSONResponse:
+    t = (type or "").strip().lower()
+    if t not in {"movie", "tv"}:
+        return JSONResponse({"error": "type must be movie|tv"}, status_code=400)
+    tmdb_id = int(id)
+
+    try:
+        if t == "movie":
+            movie = _tmdb_get(f"/movie/{tmdb_id}", params={"language": "en-US"})
+            unified = _unified_movie(movie)
+
+            collection = None
+            btc = movie.get("belongs_to_collection") or {}
+            cid = btc.get("id")
+            if cid:
+                coll = _tmdb_get(f"/collection/{cid}", params={"language": "en-US"})
+                parts = coll.get("parts") or []
+                members = [_unified_movie(p) for p in parts if p.get("id")]
+                collection = {
+                    "tmdb_id": cid,
+                    "name": coll.get("name") or btc.get("name") or "",
+                    "members": members,
+                }
+
+            return JSONResponse({
+                **unified,
+                "collection": collection,
+            })
+
+        show = _tmdb_get(f"/tv/{tmdb_id}", params={"language": "en-US"})
+        unified = _unified_tv(show)
+        creators = [c.get("id") for c in (show.get("created_by") or []) if c.get("id")]
+
+        kw_resp = _tmdb_get(f"/tv/{tmdb_id}/keywords")
+        kw_items = kw_resp.get("results") or kw_resp.get("keywords") or []
+        keyword_ids = [k.get("id") for k in kw_items if k.get("id")]
+
+        return JSONResponse({
+            **unified,
+            "creator_ids": creators,
+            "keyword_ids": keyword_ids,
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
+@app.post("/api/request/expand")
+async def api_request_expand(payload: RequestExpandIn) -> JSONResponse:
+    t = (payload.type or "").strip().lower()
+    if t not in {"movie", "tv"}:
+        return JSONResponse({"error": "type must be movie|tv"}, status_code=400)
+    seed_id = int(payload.tmdb_id)
+
+    try:
+        if t == "movie":
+            movie = _tmdb_get(f"/movie/{seed_id}", params={"language": "en-US"})
+            seed = _unified_movie(movie)
+
+            btc = movie.get("belongs_to_collection") or {}
+            cid = btc.get("id")
+            if not cid:
+                return JSONResponse({"seed": seed, "candidates": []})
+
+            coll = _tmdb_get(f"/collection/{cid}", params={"language": "en-US"})
+            coll_name = coll.get("name") or btc.get("name") or "collection"
+            candidates: List[Dict[str, Any]] = []
+            for p in (coll.get("parts") or []):
+                pid = p.get("id")
+                if not pid or int(pid) == seed_id:
+                    continue
+                candidates.append(_unified_movie(p, reason=f"collection:{coll_name}"))
+                if len(candidates) >= 50:
+                    break
+            return JSONResponse({"seed": seed, "candidates": candidates})
+
+        show = _tmdb_get(f"/tv/{seed_id}", params={"language": "en-US"})
+        seed = _unified_tv(show)
+        creator_ids = [c.get("id") for c in (show.get("created_by") or []) if c.get("id")]
+
+        kw_resp = _tmdb_get(f"/tv/{seed_id}/keywords")
+        kw_items = kw_resp.get("results") or kw_resp.get("keywords") or []
+        keyword_ids = [k.get("id") for k in kw_items if k.get("id")]
+
+        creator_ids = [int(x) for x in creator_ids][:5]
+        keyword_ids = [int(x) for x in keyword_ids][:10]
+
+        candidates: List[Dict[str, Any]] = []
+        seed_key = f"tv:{seed_id}"
+        seen: set[str] = {seed_key}
+
+        def _add(items: List[Dict[str, Any]], reason: str) -> None:
+            for it in items:
+                cid = it.get("id")
+                if not cid:
+                    continue
+                cid_i = int(cid)
+                key = f"tv:{cid_i}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(_unified_tv(it, reason=reason))
+                if len(candidates) >= 50:
+                    return
+
+        def _add_search_results(items: List[Dict[str, Any]], reason: str) -> None:
+            for it in items:
+                cid = it.get("id")
+                if not cid:
+                    continue
+                cid_i = int(cid)
+                media_type = (it.get("media_type") or "").lower()
+                if media_type not in {"tv", "movie"}:
+                    continue
+                key = f"{media_type}:{cid_i}"
+                if key == seed_key or key in seen:
+                    continue
+                if media_type == "tv":
+                    unified = _unified_tv(it, reason=reason)
+                else:
+                    unified = _unified_movie(it, reason=reason)
+                seen.add(key)
+                candidates.append(unified)
+                if len(candidates) >= 50:
+                    return
+
+        if creator_ids and keyword_ids:
+            resp = _tmdb_get(
+                "/discover/tv",
+                params={
+                    "with_people": ",".join(str(x) for x in creator_ids),
+                    "with_keywords": ",".join(str(x) for x in keyword_ids),
+                    "sort_by": "popularity.desc",
+                    "page": 1,
+                    "include_adult": "false",
+                },
+            )
+            _add(resp.get("results") or [], reason="discover:creators+keywords")
+
+        if len(candidates) < 50 and creator_ids:
+            resp = _tmdb_get(
+                "/discover/tv",
+                params={
+                    "with_people": ",".join(str(x) for x in creator_ids),
+                    "sort_by": "popularity.desc",
+                    "page": 1,
+                    "include_adult": "false",
+                },
+            )
+            _add(resp.get("results") or [], reason="discover:creators")
+
+        if len(candidates) < 50 and keyword_ids:
+            resp = _tmdb_get(
+                "/discover/tv",
+                params={
+                    "with_keywords": ",".join(str(x) for x in keyword_ids),
+                    "sort_by": "popularity.desc",
+                    "page": 1,
+                    "include_adult": "false",
+                },
+            )
+            _add(resp.get("results") or [], reason="discover:keywords")
+
+        if len(candidates) < 50:
+            franchise_query = (show.get("name") or show.get("original_name") or "").strip()
+            if franchise_query:
+                resp = _tmdb_get(
+                    "/search/multi",
+                    params={
+                        "query": franchise_query,
+                        "language": "en-US",
+                        "page": 1,
+                        "include_adult": "false",
+                    },
+                )
+                _add_search_results(resp.get("results") or [], reason="search:franchise")
+
+        return JSONResponse({"seed": seed, "candidates": candidates})
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
+@app.post("/api/request/submit")
+async def api_request_submit(payload: RequestSubmitIn) -> JSONResponse:
+    movie_tmdb_ids = _sanitize_tmdb_ids(payload.movie_tmdb_ids, max_n=50)
+    tv_tmdb_ids = _sanitize_tmdb_ids(payload.tv_tmdb_ids, max_n=50)
+    if not movie_tmdb_ids and not tv_tmdb_ids:
+        return JSONResponse({"error": "no tmdb ids provided"}, status_code=400)
+
+    request_id = uuid.uuid4().hex
+    req_dir = os.path.join(REQUESTS_DIR, request_id)
+    os.makedirs(req_dir, exist_ok=True)
+
+    now = datetime.now().isoformat()
+    status: Dict[str, Any] = {
+        'request_id': request_id,
+        'state': 'queued',
+        'created_at': now,
+        'updated_at': now,
+        'movie_tmdb_ids': movie_tmdb_ids,
+        'tv_tmdb_ids': tv_tmdb_ids,
+        'jobs': {
+            'movies': {'state': 'pending' if movie_tmdb_ids else 'skipped'},
+            'tv': {'state': 'pending' if tv_tmdb_ids else 'skipped'},
+        },
+        'errors': [],
+    }
+
+    _atomic_write_json(_request_status_path(request_id), status)
+
+    t = threading.Thread(
+        target=_run_request_jobs,
+        args=(request_id, movie_tmdb_ids, tv_tmdb_ids),
+        daemon=True,
+        name=f"request-{request_id[:8]}",
+    )
+    t.start()
+
+    return JSONResponse({'request_id': request_id})
+
+
+@app.get("/api/request/status")
+async def api_request_status(request_id: str = Query(...)) -> JSONResponse:
+    request_id = (request_id or '').strip()
+    if not _is_safe_request_id(request_id):
+        return JSONResponse({'error': 'invalid request_id'}, status_code=400)
+    status = _read_json_file(_request_status_path(request_id))
+    if status is None:
+        return JSONResponse({'error': 'request not found'}, status_code=404)
+    return JSONResponse(status)
 
 
 @app.get("/api/torrents")
