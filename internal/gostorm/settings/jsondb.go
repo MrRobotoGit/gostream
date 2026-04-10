@@ -29,7 +29,7 @@ func NewJsonDB() GoStormDB {
 	if globalJsonDB != nil {
 		return globalJsonDB
 	}
-	globalJsonDB := &JsonDB{
+	globalJsonDB = &JsonDB{
 		Path:              Path,
 		filenameDelimiter: ".",
 		filenameExtension: ".json",
