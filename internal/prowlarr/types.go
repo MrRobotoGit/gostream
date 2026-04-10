@@ -10,12 +10,14 @@ type ConfigProwlarr struct {
 
 // ProwlarrResult mirrors a single item from the Prowlarr /api/v1/search response.
 type ProwlarrResult struct {
-	Title    string `json:"title"`
-	Size     int64  `json:"size"`
-	Seeders  int    `json:"seeders"`
-	Leechers int    `json:"leechers"`
-	InfoHash string `json:"infoHash"`
-	Quality  struct {
+	Guid        string `json:"guid"`
+	Title       string `json:"title"`
+	Size        int64  `json:"size"`
+	Seeders     int    `json:"seeders"`
+	Leechers    int    `json:"leechers"`
+	InfoHash    string `json:"infoHash"`
+	DownloadUrl string `json:"downloadUrl"`
+	Quality     struct {
 		Quality struct {
 			Resolution int `json:"resolution"`
 		} `json:"quality"`

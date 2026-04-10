@@ -212,6 +212,7 @@ func (e *TVGoEngine) Name() string { return "tv" }
 func (e *TVGoEngine) Run(ctx context.Context) error {
 	e.logger.Printf("Starting TV sync...")
 	e.populateRegistryFromExisting()
+	e.reconcileRegistry()
 
 	shows, err := e.discoverShows(ctx)
 	if err != nil {
@@ -1087,6 +1088,28 @@ func (e *TVGoEngine) getCompleteSeasons(showName string, details *tmdb.TVDetail)
 	}
 
 	return complete
+}
+
+// reconcileRegistry removes registry entries whose backing MKV file no longer
+// exists on disk (ghost entries). It runs before the main show-processing loop
+// so that the current sync can immediately search for and recreate missing episodes.
+func (e *TVGoEngine) reconcileRegistry() {
+	removed := 0
+	for key, entry := range e.registry {
+		if _, err := os.Stat(entry.FilePath); os.IsNotExist(err) {
+			delete(e.registry, key)
+			if e.db != nil {
+				if err := e.db.DeleteEpisode(key); err != nil {
+					e.logger.Printf("[TVSync] Warning: failed to delete ghost entry %s from DB: %v", key, err)
+				}
+			}
+			removed++
+			e.logger.Printf("[TVSync] Ghost entry removed: %s (missing: %s)", key, entry.FilePath)
+		}
+	}
+	if removed > 0 {
+		e.logger.Printf("[TVSync] Reconciliation complete: %d ghost entries removed", removed)
+	}
 }
 
 func (e *TVGoEngine) cleanupOrphanedFiles() {

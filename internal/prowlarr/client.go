@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -72,23 +73,16 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string) []Prowlarr
 	var queries []map[string]string
 	if contentType == "series" {
 		queries = append(queries, mergeParams(baseParams, map[string]string{
-			"query":      imdbID,
-			"categories": "5040",
+			"query": imdbID,
 		}))
 		if title != "" {
 			queries = append(queries, mergeParams(baseParams, map[string]string{
-				"query":      title,
-				"categories": "5000",
+				"query": title,
 			}))
 		}
 	} else {
 		queries = append(queries, mergeParams(baseParams, map[string]string{
-			"query":      imdbID,
-			"categories": "2040",
-		}))
-		queries = append(queries, mergeParams(baseParams, map[string]string{
-			"query":      imdbID,
-			"categories": "2045",
+			"query": imdbID,
 		}))
 	}
 
@@ -110,7 +104,8 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string) []Prowlarr
 		collected[r.idx] = r.items
 	}
 
-	// Merge deduplicating by infoHash (q1 first, then q2)
+	// Merge deduplicating by infoHash when available, or by guid for no-hash results.
+	// No-hash results with a downloadUrl are kept for later hash resolution.
 	var all []ProwlarrResult
 	for _, items := range collected {
 		all = append(all, items...)
@@ -118,8 +113,12 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string) []Prowlarr
 	seen := make(map[string]bool, len(all))
 	merged := make([]ProwlarrResult, 0, len(all))
 	for _, r := range all {
-		key := strings.ToLower(r.InfoHash)
-		if key == "" {
+		var key string
+		if r.InfoHash != "" {
+			key = strings.ToLower(r.InfoHash)
+		} else if r.DownloadUrl != "" {
+			key = r.Guid
+		} else {
 			continue
 		}
 		if !seen[key] {
@@ -168,23 +167,59 @@ func (c *Client) queryCtx(ctx context.Context, params map[string]string) []Prowl
 }
 
 // mapToStremioFormat converts raw Prowlarr results to Stremio/Torrentio stream format.
-// Filters out garbage releases and entries without valid resolution.
+// Results without infoHash but with a downloadUrl have their hash resolved via a
+// lightweight GET request that follows Prowlarr's 301→magnet redirect.
+// Resolution is performed concurrently (up to 5 goroutines).
 func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
-	streams := make([]Stream, 0, len(results))
-	for _, res := range results {
-		if res.InfoHash == "" {
-			continue
-		}
+	// Separate results: those with hash are ready, those without need resolution.
+	type indexed struct {
+		idx int
+		res ProwlarrResult
+	}
+	ready := make([]ProwlarrResult, 0, len(results))
+	needsResolution := make([]indexed, 0)
+
+	for i, res := range results {
 		if garbageRe.MatchString(res.Title) {
 			continue
 		}
+		if res.InfoHash != "" {
+			ready = append(ready, res)
+		} else if res.DownloadUrl != "" {
+			needsResolution = append(needsResolution, indexed{i, res})
+		}
+	}
 
+	// Resolve missing hashes concurrently (max 5 workers).
+	if len(needsResolution) > 0 {
+		sem := make(chan struct{}, 5)
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for _, item := range needsResolution {
+			wg.Add(1)
+			item := item
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				hash := c.resolveHashFromDownloadURL(item.res.DownloadUrl)
+				if hash != "" {
+					item.res.InfoHash = hash
+					mu.Lock()
+					ready = append(ready, item.res)
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+	}
+
+	streams := make([]Stream, 0, len(ready))
+	for _, res := range ready {
 		resTag := resolveResolution(res.Quality.Quality.Resolution, res.Title)
-
 		sizeGB := float64(res.Size) / (1024 * 1024 * 1024)
 		formattedTitle := fmt.Sprintf("%s\n👤 %d ⬇️ %d\n💾 %.2fGB",
 			res.Title, res.Seeders, res.Leechers, sizeGB)
-
 		streams = append(streams, Stream{
 			Name:     fmt.Sprintf("Torrentio\n%s", resTag),
 			Title:    formattedTitle,
@@ -195,6 +230,44 @@ func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
 		})
 	}
 	return streams
+}
+
+// resolveHashFromDownloadURL follows the Prowlarr download proxy URL, which issues a
+// 301 redirect to a magnet link containing the infohash in the Location header.
+// Returns the uppercase hex infohash, or empty string on failure.
+func (c *Client) resolveHashFromDownloadURL(downloadURL string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+	noRedirectClient := &http.Client{
+		Timeout: 8 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusFound {
+		return ""
+	}
+
+	location := resp.Header.Get("Location")
+	m := reBtih.FindStringSubmatch(location)
+	if len(m) < 2 {
+		return ""
+	}
+	return strings.ToUpper(m[1])
 }
 
 // resolveResolution determines the resolution tag from the API value or falls back to regex.
