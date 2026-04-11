@@ -468,7 +468,7 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 	// Prowlarr first
 	if e.prowlarr != nil {
 		streams := e.prowlarr.FetchTorrents(imdbID, "movie", title)
-		if len(streams) > 0 {
+		if len(e.filterMovieStreams(streams)) > 0 {
 			return streams, nil
 		}
 	}

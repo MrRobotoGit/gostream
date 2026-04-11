@@ -472,6 +472,29 @@ func (e *TVGoEngine) discoverShows(ctx context.Context) ([]tmdb.TVShow, error) {
 	return all, nil
 }
 
+// isShowRecent returns true if the show has had recent activity within tvMaxShowAgeDays.
+// Mirrors Python's _is_show_recent(): checks first_air_date, last_air_date, and
+// next_episode_to_air so that old shows with new seasons (e.g. Stranger Things S5)
+// are not incorrectly filtered out.
+func isShowRecent(details *tmdb.TVDetail) bool {
+	cutoff := time.Now().AddDate(0, 0, -tvMaxShowAgeDays)
+	parse := func(s string) (time.Time, bool) {
+		t, err := time.Parse("2006-01-02", s)
+		return t, err == nil && !t.IsZero()
+	}
+
+	if t, ok := parse(details.FirstAirDate); ok && t.After(cutoff) {
+		return true
+	}
+	if t, ok := parse(details.LastAirDate); ok && t.After(cutoff) {
+		return true
+	}
+	if details.NextEpisodeToAir != nil {
+		return true
+	}
+	return false
+}
+
 func (e *TVGoEngine) passesShowFilters(show tmdb.TVShow) bool {
 	// Genre filter
 	for _, gid := range show.GenreIDs {
@@ -519,6 +542,17 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 		return
 	}
 	e.logger.Printf("  TMDB lookups: %v", time.Since(t0).Round(time.Millisecond))
+
+	// Age check: skip shows with no recent activity (mirrors Python _is_show_recent).
+	// TVOnTheAir/AiringToday endpoints guarantee recency, but TVTrending and Discover
+	// can surface old shows. We check all three conditions on TVDetail fields:
+	//   1. premiered recently (first_air_date)
+	//   2. aired recently — catches old shows with new seasons (last_air_date)
+	//   3. has upcoming episodes planned (next_episode_to_air)
+	if !isShowRecent(details) {
+		e.logger.Printf("  Skipping '%s' — no recent activity (last: %s, next: %v)", showName, details.LastAirDate, details.NextEpisodeToAir != nil)
+		return
+	}
 
 	// Check complete seasons
 	completeSeasons := e.getCompleteSeasons(showName, details)
@@ -579,6 +613,14 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 		}
 		if seasonsComplete[stream.Season] {
 			continue
+		}
+		// Pre-check: if season is already complete in registry at equal/lower quality, skip
+		// without fetching torrent info (AddTorrent + GetTorrentInfo can take up to 90s).
+		if avgScore, isComplete := completeSeasons[stream.Season]; isComplete {
+			if float64(stream.QualityScore) <= avgScore*tvUpgradeThreshold {
+				e.logger.Printf("    fullpack S%02d: already complete (registry avg=%.0f, stream=%d) — skipped", stream.Season, avgScore, stream.QualityScore)
+				continue
+			}
 		}
 
 		t2 := time.Now()
@@ -664,9 +706,25 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 			}
 		}
 		e.logger.Printf("    Prowlarr: %d streams in %v", len(allStreams), time.Since(tp).Round(time.Millisecond))
+
+		// If Prowlarr returned streams but none survive classification, discard and try Torrentio.
+		if len(allStreams) > 0 {
+			anyUsable := false
+			for _, s := range allStreams {
+				if e.classifyStream(s) != nil {
+					anyUsable = true
+					break
+				}
+			}
+			if !anyUsable {
+				e.logger.Printf("    Prowlarr: all %d streams discarded — trying Torrentio", len(allStreams))
+				allStreams = allStreams[:0]
+				clear(seenHashes)
+			}
+		}
 	}
 
-	// Torrentio fallback
+	// Torrentio fallback: Prowlarr down, timeout, 0 results, or all discarded
 	if len(allStreams) == 0 {
 		seasonEps := make(map[int]int)
 		for _, sd := range details.Seasons {
