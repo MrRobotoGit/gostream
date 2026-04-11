@@ -540,7 +540,7 @@ func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) *MovieStream {
 	}
 
 	seeders := e.extractMovieSeeders(title)
-	if seeders < mMovieMinSeeders {
+	if seeders > 0 && seeders < mMovieMinSeeders {
 		return nil
 	}
 
