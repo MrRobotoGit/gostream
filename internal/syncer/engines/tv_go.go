@@ -985,6 +985,7 @@ func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, strea
 	}
 
 	created := 0
+	skipped := 0
 	cleanShow := e.getShowFolderName(showName, firstAirDate)
 
 	for _, vf := range videoFiles {
@@ -1004,6 +1005,7 @@ func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, strea
 		if existing, ok := e.registry[key]; ok {
 			if float64(stream.QualityScore) <= float64(existing.QualityScore)*tvUpgradeThreshold {
 				e.stats.EpisodesSkipped++
+				skipped++
 				e.processedThisRun[key] = true
 				continue
 			}
@@ -1026,6 +1028,9 @@ func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, strea
 		}
 	}
 
+	if skipped > 0 && created == 0 {
+		e.logger.Printf("  fullpack skipped: %d/%d eps already at sufficient quality (score %d)", skipped, len(videoFiles), stream.QualityScore)
+	}
 	if created == 0 {
 		e.gostorm.RemoveTorrent(ctx, hash)
 	}
@@ -1052,6 +1057,7 @@ func (e *TVGoEngine) processSingle(ctx context.Context, showName string, stream 
 		if float64(stream.QualityScore) <= float64(existing.QualityScore)*tvUpgradeThreshold {
 			e.stats.EpisodesSkipped++
 			e.processedThisRun[key] = true
+			e.logger.Printf("  Skip S%02dE%02d: score %d <= existing %d (threshold %.0f)", season, episode, stream.QualityScore, existing.QualityScore, float64(existing.QualityScore)*tvUpgradeThreshold)
 			return 0
 		}
 	}
