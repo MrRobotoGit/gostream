@@ -40,7 +40,7 @@ func NewClient(cfg ConfigProwlarr) *Client {
 }
 
 // FetchTorrents queries Prowlarr and returns Stremio-format streams.
-// contentType is "movie" or "series". title is the show/movie name (used for TV UHD searches).
+// contentType is "movie" or "series". title is the show/movie name.
 // Returns an empty slice (never nil) if disabled or on error.
 func (c *Client) FetchTorrents(imdbID, contentType, title string) []Stream {
 	if c == nil {
@@ -50,9 +50,9 @@ func (c *Client) FetchTorrents(imdbID, contentType, title string) []Stream {
 	return c.mapToStremioFormat(results)
 }
 
-// fetchFromProwlarr executes the dual-strategy API query in parallel and merges results by infoHash.
-// Movies: HD (2040) + UHD (2045) — parallel
-// TV: HD by imdbID (5040) + All by title (5000) — parallel when title is set
+// fetchFromProwlarr executes an API query using the IMDb ID and merges results by infoHash.
+// We purposely use IMDb ID for both movies and TV series to avoid keyword collisions
+// that happen with titles like "Paradise" mapping to unrelated content.
 func (c *Client) fetchFromProwlarr(imdbID, contentType, title string) []ProwlarrResult {
 	prowlarrType := "movie"
 	if contentType == "series" {
@@ -71,20 +71,9 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string) []Prowlarr
 	}
 
 	var queries []map[string]string
-	if contentType == "series" {
-		queries = append(queries, mergeParams(baseParams, map[string]string{
-			"query": imdbID,
-		}))
-		if title != "" {
-			queries = append(queries, mergeParams(baseParams, map[string]string{
-				"query": title,
-			}))
-		}
-	} else {
-		queries = append(queries, mergeParams(baseParams, map[string]string{
-			"query": imdbID,
-		}))
-	}
+	queries = append(queries, mergeParams(baseParams, map[string]string{
+		"query": imdbID,
+	}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()

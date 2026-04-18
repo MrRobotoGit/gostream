@@ -111,6 +111,8 @@ const (
 	noMKVCacheTTL        = 12 * time.Hour
 	noStreamsCacheTTL    = 24 * time.Hour
 	recheckCacheTTL      = 48 * time.Hour
+	recheck1080pTTL      = 6 * time.Hour
+	recheckNoFileTTL     = 24 * time.Hour
 	addFailCacheTTL      = 168 * time.Hour
 )
 
@@ -347,11 +349,23 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		return false
 	}
 
+	// TTL recheck upgrade-aware: 1080p esistente → 6h (cerca upgrade 4K),
+	// 4K esistente → 48h, nessun file → 24h.
+	existing := existingIndex[imdbID]
+	recheckTTL := recheckNoFileTTL
+	if existing.path != "" {
+		if existing.score >= mMovie4KBase {
+			recheckTTL = recheckCacheTTL
+		} else {
+			recheckTTL = recheck1080pTTL
+		}
+	}
+
 	// Check negative caches
 	if e.isInCache(e.noStreamsCache, imdbID, noStreamsCacheTTL) {
 		return false
 	}
-	if e.isInCache(e.recheckCache, imdbID, recheckCacheTTL) {
+	if e.isInCache(e.recheckCache, imdbID, recheckTTL) {
 		return false
 	}
 	if e.isInCache(e.addFailCache, imdbID, addFailCacheTTL) {
@@ -375,7 +389,6 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 	}
 
 	// Check if we already have this movie
-	existing := existingIndex[imdbID]
 	existingPath := existing.path
 	existingScore := existing.score
 

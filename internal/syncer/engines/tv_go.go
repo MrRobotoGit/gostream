@@ -672,6 +672,7 @@ type TVStream struct {
 	IsPartialPack bool
 	QualityScore  int
 	Season        int
+	EpisodeNum    int
 	Seeders       int
 	SizeGB        float64
 	Priority      int
@@ -692,6 +693,14 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 
 	var allStreams []prowlarr.Stream
 	seenHashes := make(map[string]bool)
+
+	// Build TMDB episode cap per season — used to reject streams beyond the canonical count
+	tmdbSeasonEps := make(map[int]int)
+	for _, sd := range details.Seasons {
+		if sd.SeasonNumber > 0 && sd.EpisodeCount > 0 {
+			tmdbSeasonEps[sd.SeasonNumber] = sd.EpisodeCount
+		}
+	}
 
 	// Prowlarr primary
 	if e.prowlarr != nil {
@@ -725,19 +734,12 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 
 	// Torrentio fallback: Prowlarr down, timeout, 0 results, or all discarded
 	if len(allStreams) == 0 {
-		seasonEps := make(map[int]int)
-		for _, sd := range details.Seasons {
-			if sd.SeasonNumber > 0 {
-				seasonEps[sd.SeasonNumber] = sd.EpisodeCount
-			}
-		}
-
 		tt := time.Now()
 		epsFetched := 0
 		for season := startSeason; season <= endSeason; season++ {
-			epCount := seasonEps[season]
+			epCount := tmdbSeasonEps[season]
 			if epCount == 0 {
-				epCount = 10
+				continue // TMDB has no episode data for this season — skip rather than guessing
 			}
 			for ep := 1; ep <= epCount; ep++ {
 				tioStreams, err := e.torrentio.FetchEpisodeStreams(ctx, imdbID, season, ep)
@@ -770,6 +772,12 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		}
 		if c.Season < startSeason || c.Season > endSeason {
 			continue
+		}
+		// Reject single-episode streams beyond TMDB's canonical episode count
+		if !c.IsFullpack && c.EpisodeNum > 0 {
+			if maxEp, ok := tmdbSeasonEps[c.Season]; ok && c.EpisodeNum > maxEp {
+				continue
+			}
 		}
 		span := e.extractSeasonSpan(c.Title)
 		if span != nil && span[0] < startSeason {
@@ -818,6 +826,12 @@ func (e *TVGoEngine) classifyStream(s prowlarr.Stream) *TVStream {
 
 	isFullpack := e.isFullpack(title)
 	season := e.extractSeason(title)
+	episodeNum := 0
+	if !isFullpack {
+		if m := reTVEpNum.FindStringSubmatch(title); m != nil {
+			episodeNum, _ = strconv.Atoi(m[2])
+		}
+	}
 	isPartialPack := false
 	if isFullpack {
 		isPartialPack = reTVRange.MatchString(strings.Split(title, "\n")[0])
@@ -839,6 +853,7 @@ func (e *TVGoEngine) classifyStream(s prowlarr.Stream) *TVStream {
 		IsPartialPack: isPartialPack,
 		QualityScore:  qualityScore,
 		Season:        season,
+		EpisodeNum:    episodeNum,
 		Seeders:       seeders,
 		SizeGB:        s.SizeGB,
 		Priority:      qualityScore + priorityBonus,
