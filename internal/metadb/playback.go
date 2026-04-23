@@ -52,7 +52,7 @@ func (d *DB) LoadPlaybackStates(maxAge time.Duration) ([]*PlaybackRecord, error)
 	rows, err := d.db.Query(`
 		SELECT path, hash, imdb_id, opened_at, confirmed_at, is_healthy, is_stopped, last_read_at, read_count, last_seek_off
 		FROM playback_states
-		WHERE opened_at > ? OR opened_at IS NULL`, cutoff)
+		WHERE COALESCE(last_read_at, confirmed_at, opened_at) > ?`, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (d *DB) DeletePlaybackState(path string) error {
 // CleanupPlaybackStates removes entries older than maxAge.
 func (d *DB) CleanupPlaybackStates(maxAge time.Duration) (int, error) {
 	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339Nano)
-	result, err := d.db.Exec("DELETE FROM playback_states WHERE opened_at < ?", cutoff)
+	result, err := d.db.Exec("DELETE FROM playback_states WHERE COALESCE(last_read_at, confirmed_at, opened_at) < ?", cutoff)
 	if err != nil {
 		return 0, err
 	}

@@ -149,7 +149,8 @@ CREATE INDEX IF NOT EXISTS idx_playback_healthy ON playback_states(is_healthy);
 		return err
 	}
 
-	// V750: Register schema version for playback_states
+	// V750: Register schema versions
+	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (1, 'initial schema')`)
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (2, 'add playback_states table')`)
 	return nil
 }

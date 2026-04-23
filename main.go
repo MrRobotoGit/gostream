@@ -114,8 +114,8 @@ func (ps *PlaybackState) SetHealthy(healthy bool) {
 func (ps *PlaybackState) IsInferredPlayback() bool {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
-	if ps.IsHealthy {
-		return false // Already confirmed, no need for inference
+	if ps.IsHealthy || ps.IsStopped {
+		return false
 	}
 	now := time.Now()
 	active := !ps.LastReadAt.IsZero() && now.Sub(ps.LastReadAt) < 10*time.Minute
@@ -2730,12 +2730,10 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if stopMatch != "" && stopState != nil {
-			stopState.SetHealthy(false)
-			// V750: Persist state change
-			savePlaybackStateToDB(stopState)
 			stopState.mu.Lock()
 			stopState.IsStopped = true
 			stopState.mu.Unlock()
+			stopState.SetHealthy(false) // persists with IsStopped=true
 			logger.Printf("[PLEX] Priority removed for: %s (Event: %s)", filepath.Base(stopMatch), payload.Event)
 
 			if val, ok := activePumps.Load(stopMatch); ok {
@@ -2797,6 +2795,7 @@ func restorePlaybackStates(db *metadb.DB) {
 		return
 	}
 	restored := 0
+	priorityApplied := 0
 	for _, rec := range records {
 		if rec.IsHealthy && !rec.ConfirmedAt.IsZero() {
 			ps := &PlaybackState{
@@ -2817,13 +2816,14 @@ func restorePlaybackStates(db *metadb.DB) {
 				if t := web.BTS.GetTorrent(hHash); t != nil {
 					t.IsPriority = true
 					t.SetAggressiveMode(true, GetEffectiveConcurrencyLimit())
+					priorityApplied++
 					logger.Printf("[V750] Priority RESTORED from DB: %s", filepath.Base(rec.Path))
 				}
 			}
 			restored++
 		}
 	}
-	logger.Printf("[V750] Restored %d/%d playback states from DB", restored, len(records))
+	logger.Printf("[V750] Restored %d/%d PlaybackStates, %d priorities reapplied", restored, len(records), priorityApplied)
 }
 
 //go:embed settings.html
