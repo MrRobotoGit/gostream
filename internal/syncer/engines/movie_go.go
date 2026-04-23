@@ -504,30 +504,31 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 }
 
 func (e *MovieGoEngine) filterMovieStreams(streams []prowlarr.Stream) []MovieStream {
-	// Pass 1: 4K
-	var pass4K []MovieStream
+	rejectCounts := map[string]int{}
+	var pass4K, pass1080 []MovieStream
 	for _, s := range streams {
-		c := e.classifyMovieStream(s)
-		if c == nil || !c.Is4K {
+		c, reason := e.classifyMovieStream(s)
+		if c == nil {
+			rejectCounts[reason]++
 			continue
 		}
-		pass4K = append(pass4K, *c)
+		if c.Is4K {
+			pass4K = append(pass4K, *c)
+		} else {
+			pass1080 = append(pass1080, *c)
+		}
 	}
+
+	if len(streams) > 0 {
+		e.logger.Printf("[filter] streams=%d 4K=%d 1080p=%d rejected=%v",
+			len(streams), len(pass4K), len(pass1080), rejectCounts)
+	}
+
 	if len(pass4K) > 0 {
 		sort.Slice(pass4K, func(i, j int) bool {
 			return pass4K[i].QualityScore > pass4K[j].QualityScore
 		})
 		return pass4K
-	}
-
-	// Pass 2: 1080p
-	var pass1080 []MovieStream
-	for _, s := range streams {
-		c := e.classifyMovieStream(s)
-		if c == nil || c.Is4K {
-			continue
-		}
-		pass1080 = append(pass1080, *c)
 	}
 	sort.Slice(pass1080, func(i, j int) bool {
 		return pass1080[i].QualityScore > pass1080[j].QualityScore
@@ -535,33 +536,33 @@ func (e *MovieGoEngine) filterMovieStreams(streams []prowlarr.Stream) []MovieStr
 	return pass1080
 }
 
-func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) *MovieStream {
+func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) (*MovieStream, string) {
 	title := s.Title
 	fullText := title + " " + s.Name
 
 	if reMGarbage.MatchString(fullText) {
-		return nil
+		return nil, "garbage"
 	}
 	if reMExclLang.MatchString(title) {
-		return nil
+		return nil, "excl_lang"
 	}
 	if e.isBlacklisted(title) {
-		return nil
+		return nil, "blacklist_title"
 	}
 	if _, ok := e.blacklist.Hashes[strings.ToLower(s.InfoHash)]; ok {
-		return nil
+		return nil, "blacklist_hash"
 	}
 
 	seeders := e.extractMovieSeeders(title)
 	if seeders > 0 && seeders < mMovieMinSeeders {
-		return nil
+		return nil, "low_seeders"
 	}
 
 	is4K := reM4K.MatchString(fullText)
 	is1080p := reM1080p.MatchString(fullText) && !reM720p.MatchString(fullText)
 
 	if !is4K && !is1080p {
-		return nil
+		return nil, "resolution_unknown"
 	}
 
 	sizeGB := s.SizeGB
@@ -569,17 +570,17 @@ func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) *MovieStream {
 	// 4K: accept unknown size with penalty; 1080p: reject unknown
 	if is4K {
 		if sizeGB != 0 && (sizeGB < mMovie4KMinGB || sizeGB > mMovie4KMaxGB) {
-			return nil
+			return nil, "4k_size_oob"
 		}
 	} else {
 		if sizeGB == 0 || sizeGB < mMovie1080PMinGB || sizeGB > mMovie1080PMaxGB {
-			return nil
+			return nil, "1080p_size_oob"
 		}
 	}
 
 	score := e.calculateMovieScore(fullText, seeders, sizeGB, is4K)
 	if score <= 0 {
-		return nil
+		return nil, "zero_score"
 	}
 
 	return &MovieStream{
@@ -589,7 +590,7 @@ func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) *MovieStream {
 		QualityScore: score,
 		Seeders:      seeders,
 		SizeGB:       sizeGB,
-	}
+	}, ""
 }
 
 func (e *MovieGoEngine) calculateMovieScore(text string, seeders int, sizeGB float64, is4K bool) int {

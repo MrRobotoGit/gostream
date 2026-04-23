@@ -556,18 +556,31 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 	// Check complete seasons
 	completeSeasons := e.getCompleteSeasons(showName, details)
 	skippedSeasons := make(map[int]bool)
-	allComplete := true
-	for sn, avgScore := range completeSeasons {
-		if avgScore >= tvMinQualitySkip {
-			skippedSeasons[sn] = true
+
+	// Determine target seasons range
+	numSeasons := details.NumberOfSeasons
+	if numSeasons == 0 {
+		numSeasons = 5
+	}
+	maxSeasons := 2
+	startSeason := numSeasons - maxSeasons + 1
+	if startSeason < 1 {
+		startSeason = 1
+	}
+	endSeason := numSeasons
+
+	allTargetComplete := true
+	for s := startSeason; s <= endSeason; s++ {
+		if avgScore, ok := completeSeasons[s]; ok && avgScore >= tvMinQualitySkip {
+			skippedSeasons[s] = true
 		} else {
-			allComplete = false
+			allTargetComplete = false
 		}
 	}
 
-	// If ALL seasons are complete, skip entire show immediately
-	if allComplete && len(completeSeasons) > 0 {
-		e.logger.Printf("Skipping '%s' — all %d seasons complete", showName, len(completeSeasons))
+	// If ALL target seasons are complete, skip entire show immediately
+	if allTargetComplete {
+		e.logger.Printf("Skipping '%s' — all %d target seasons complete", showName, endSeason-startSeason+1)
 		return
 	}
 
@@ -705,7 +718,11 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 	// Prowlarr primary
 	if e.prowlarr != nil {
 		tp := time.Now()
-		streams := e.prowlarr.FetchTorrents(imdbID, "series", showName)
+		var targetSeasons []int
+		for s := startSeason; s <= endSeason; s++ {
+			targetSeasons = append(targetSeasons, s)
+		}
+		streams := e.prowlarr.FetchTorrents(imdbID, "series", showName, targetSeasons...)
 		for _, s := range streams {
 			h := strings.ToLower(s.InfoHash)
 			if h != "" && !seenHashes[h] {

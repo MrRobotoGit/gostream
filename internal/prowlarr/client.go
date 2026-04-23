@@ -41,19 +41,20 @@ func NewClient(cfg ConfigProwlarr) *Client {
 
 // FetchTorrents queries Prowlarr and returns Stremio-format streams.
 // contentType is "movie" or "series". title is the show/movie name.
+// seasons is optional and used for series keyword search (e.g. "title s01").
 // Returns an empty slice (never nil) if disabled or on error.
-func (c *Client) FetchTorrents(imdbID, contentType, title string) []Stream {
+func (c *Client) FetchTorrents(imdbID, contentType, title string, seasons ...int) []Stream {
 	if c == nil {
 		return []Stream{}
 	}
-	results := c.fetchFromProwlarr(imdbID, contentType, title)
+	results := c.fetchFromProwlarr(imdbID, contentType, title, seasons...)
 	return c.mapToStremioFormat(results)
 }
 
 // fetchFromProwlarr executes an API query using the IMDb ID and merges results by infoHash.
-// We purposely use IMDb ID for both movies and TV series to avoid keyword collisions
-// that happen with titles like "Paradise" mapping to unrelated content.
-func (c *Client) fetchFromProwlarr(imdbID, contentType, title string) []ProwlarrResult {
+// If contentType is "series" and seasons are provided, it also executes keyword searches
+// (e.g., "Show Name s01") in parallel to maximize discovery of 4K releases.
+func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, seasons ...int) []ProwlarrResult {
 	prowlarrType := "movie"
 	if contentType == "series" {
 		prowlarrType = "tvsearch"
@@ -71,9 +72,19 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string) []Prowlarr
 	}
 
 	var queries []map[string]string
+	// Primary query: IMDb ID
 	queries = append(queries, mergeParams(baseParams, map[string]string{
 		"query": imdbID,
 	}))
+
+	// Secondary queries: Title + Season keywords (Series only)
+	if contentType == "series" && len(seasons) > 0 {
+		for _, s := range seasons {
+			queries = append(queries, mergeParams(baseParams, map[string]string{
+				"query": fmt.Sprintf("%s s%02d", title, s),
+			}))
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
