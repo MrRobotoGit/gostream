@@ -222,12 +222,25 @@ func (cm *CleanupManager) runCleanup() {
 		return true
 	})
 
+	// V750: Persist active playback states to SQLite before cleanup
+	playbackRegistry.Range(func(key, value interface{}) bool {
+		ps, ok := value.(*PlaybackState)
+		if ok {
+			savePlaybackStateToDB(ps)
+		}
+		return true
+	})
+
 	playbackRegistry.Range(func(key, value interface{}) bool {
 		path := key.(string)
 		ps, ok := value.(*PlaybackState)
 		if !ok {
 			playbackRegistry.Delete(key)
 			stats.PlaybackRegistryPruned++
+			// V750: Also remove from SQLite
+			if stateDB != nil {
+				stateDB.DeletePlaybackState(path)
+			}
 			return true
 		}
 
@@ -266,6 +279,10 @@ func (cm *CleanupManager) runCleanup() {
 				}
 				playbackRegistry.Delete(key)
 				stats.PlaybackRegistryPruned++
+				// V750: Also remove from SQLite
+				if stateDB != nil {
+					stateDB.DeletePlaybackState(path)
+				}
 			}
 			return true
 		}
@@ -274,9 +291,20 @@ func (cm *CleanupManager) runCleanup() {
 		if now.Sub(ps.OpenedAt) > 24*time.Hour {
 			playbackRegistry.Delete(key)
 			stats.PlaybackRegistryPruned++
+			// V750: Also remove from SQLite
+			if stateDB != nil {
+				stateDB.DeletePlaybackState(path)
+			}
 		}
 		return true
 	})
+
+	// V750: Cleanup stale playback states from SQLite (>4h old)
+	if stateDB != nil {
+		if n, err := stateDB.CleanupPlaybackStates(4 * time.Hour); err == nil && n > 0 {
+			cm.logger.Printf("[V750] Cleaned up %d stale playback states from DB", n)
+		}
+	}
 
 	// Log only if something was cleaned
 	if stats.DeletedHashesRemoved > 0 || stats.OffsetsRemoved > 0 || stats.ActivitiesRemoved > 0 ||

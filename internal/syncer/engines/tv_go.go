@@ -101,9 +101,9 @@ const (
 
 var (
 	reTV4K        = regexp.MustCompile(`(?i)2160p|4k|uhd`)
-	reTV1080p     = regexp.MustCompile(`1080p`)
+	reTV1080p     = regexp.MustCompile(`(?i)1080p`)
 	reTVHDR       = regexp.MustCompile(`(?i)\bhdr\b|hdr10\+?|\bdv\b|dovi|dolby.?vision`)
-	reTVAtmos     = regexp.MustCompile(`atmos`)
+	reTVAtmos     = regexp.MustCompile(`(?i)atmos`)
 	reTV51        = regexp.MustCompile(`(?i)5\.1|dd5|ddp5|dts|truehd`)
 	reTVITA       = regexp.MustCompile(`(?i)ita|🇮🇹|multi|dual`)
 	reTVExclLang  = regexp.MustCompile(`🇪🇸|🇫🇷|🇩🇪|🇷🇺|🇨🇳|🇯🇵|🇰🇷|🇹🇭|🇵🇹|🇧🇷|🇺🇦|🇵🇱|🇳🇱|🇹🇷|🇸🇦|🇮🇳|🇨🇿|🇭🇺|🇷🇴`)

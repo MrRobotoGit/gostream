@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,7 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, seasons ..
 		"apikey":     c.cfg.APIKey,
 		"type":       prowlarrType,
 		"indexerIds": "-2",
+		"limit":      "100", // V1.7.4: Explicit limit to cover more releases in season searches
 	}
 
 	type result struct {
@@ -79,9 +81,11 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, seasons ..
 
 	// Secondary queries: Title + Season keywords (Series only)
 	if contentType == "series" && len(seasons) > 0 {
+		// Clean title for keyword search (remove colons)
+		cleanTitle := strings.ReplaceAll(title, ":", "")
 		for _, s := range seasons {
 			queries = append(queries, mergeParams(baseParams, map[string]string{
-				"query": fmt.Sprintf("%s s%02d", title, s),
+				"query": fmt.Sprintf("%s s%02d", cleanTitle, s),
 			}))
 		}
 	}
@@ -171,6 +175,17 @@ func (c *Client) queryCtx(ctx context.Context, params map[string]string) []Prowl
 // lightweight GET request that follows Prowlarr's 301→magnet redirect.
 // Resolution is performed concurrently (up to 5 goroutines).
 func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
+	if len(results) == 0 {
+		return []Stream{}
+	}
+
+	// V1.7.3: Sort by size descending immediately. This ensures that high-quality
+	// 4K releases (usually the largest) are at the top and get their infoHashes
+	// resolved first if missing.
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Size > results[j].Size
+	})
+
 	// Separate results: those with hash are ready, those without need resolution.
 	type indexed struct {
 		idx int
@@ -191,6 +206,7 @@ func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
 	}
 
 	// Resolve missing hashes concurrently (max 5 workers).
+	// With the new sort, the first workers will focus on the largest files.
 	if len(needsResolution) > 0 {
 		sem := make(chan struct{}, 5)
 		var mu sync.Mutex

@@ -94,13 +94,34 @@ type PlaybackState struct {
 	ConfirmedAt time.Time // Set when Plex webhook arrives
 	IsHealthy   bool      // Confirmed by Plex
 	IsStopped   bool      // Set on explicit media.stop webhook
+	// V750: Inferred playback detection (self-healing when webhook is lost)
+	ReadCount   int64
+	LastSeekOff int64
+	LastReadAt  time.Time
 }
 
 func (ps *PlaybackState) SetHealthy(healthy bool) {
 	ps.mu.Lock()
-	defer ps.mu.Unlock()
 	ps.IsHealthy = healthy
 	ps.ConfirmedAt = time.Now()
+	ps.mu.Unlock()
+	// V750: Persist to SQLite
+	savePlaybackStateToDB(ps)
+}
+
+// V750: Determine if this path shows evidence of active playback,
+// even without a webhook confirmation.
+func (ps *PlaybackState) IsInferredPlayback() bool {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	if ps.IsHealthy {
+		return false // Already confirmed, no need for inference
+	}
+	now := time.Now()
+	active := !ps.LastReadAt.IsZero() && now.Sub(ps.LastReadAt) < 10*time.Minute
+	significantReads := ps.ReadCount >= 3
+	streaming := ps.LastSeekOff > 2*1024*1024 // >2MB offset = real playback, not scanner
+	return active && significantReads && streaming
 }
 
 func (ps *PlaybackState) GetStatus() bool {
@@ -1143,8 +1164,12 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 
 		timeoutLimit := 45 * time.Second
 		if val, ok := playbackRegistry.Load(h.path); ok {
-			if ps, ok := val.(*PlaybackState); ok && ps.GetStatus() {
-				timeoutLimit = 2 * time.Hour
+			if ps, ok := val.(*PlaybackState); ok {
+				if ps.GetStatus() {
+					timeoutLimit = 2 * time.Hour
+				} else if ps.IsInferredPlayback() {
+					timeoutLimit = 10 * time.Minute // V750: Inferred playback
+				}
 			}
 		}
 
@@ -1328,6 +1353,19 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	idleTime := now.Sub(h.lastActivityTime)
 	isFirstBlock := (off == 0) || (idleTime > time.Duration(globalConfig.WarmStartIdleSeconds)*time.Second)
 	h.lastActivityTime = now
+
+	// V750: Update PlaybackState inference tracking
+	if val, ok := playbackRegistry.Load(h.path); ok {
+		if ps, ok := val.(*PlaybackState); ok {
+			ps.mu.Lock()
+			ps.ReadCount++
+			ps.LastReadAt = now
+			if off > 2*1024*1024 && off > ps.LastSeekOff {
+				ps.LastSeekOff = off
+			}
+			ps.mu.Unlock()
+		}
+	}
 
 	if now.Sub(h.lastGlobalUpdate) > 1*time.Minute {
 		globalCleanupManager.UpdateActivity(h.path)
@@ -1812,6 +1850,13 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 			if pbVal, ok := playbackRegistry.Load(h.path); ok {
 				if pbState := pbVal.(*PlaybackState); !pbState.ConfirmedAt.IsZero() {
 					graceDuration = 90 * time.Second
+					if pbState.IsInferredPlayback() {
+						graceDuration = 5 * time.Minute // V750
+						logger.Printf("[V750] Inferred playback — extended grace (5m) for %s", filepath.Base(h.path))
+					}
+				} else if pbState.IsInferredPlayback() {
+					graceDuration = 5 * time.Minute // V750
+					logger.Printf("[V750] Inferred playback — extended grace (5m) for %s", filepath.Base(h.path))
 				}
 			}
 			if oldTimer, ok := pumpTimers.LoadAndDelete(h.path); ok {
@@ -1867,6 +1912,12 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 	var t *time.Timer
 	t = time.AfterFunc(retentionDelay, func() {
 		priorityTimers.CompareAndDelete(h.path, t)
+
+		// V750: Don't remove priority if pump is still active for this path
+		if _, pumpOk := activePumps.Load(h.path); pumpOk {
+			logger.Printf("[V750] Priority retained — pump still active for %s", filepath.Base(h.path))
+			return
+		}
 
 		// O(1): controlla se il path ha ancora handle aperti prima di disabilitare priority.
 		if globalOpenTracker.IsPathOpen(h.path) {
@@ -2680,6 +2731,8 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 
 		if stopMatch != "" && stopState != nil {
 			stopState.SetHealthy(false)
+			// V750: Persist state change
+			savePlaybackStateToDB(stopState)
 			stopState.mu.Lock()
 			stopState.IsStopped = true
 			stopState.mu.Unlock()
@@ -2710,6 +2763,67 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(200)
+}
+
+// V750: Persist a PlaybackState to SQLite (best-effort)
+func savePlaybackStateToDB(ps *PlaybackState) {
+	if stateDB == nil {
+		return
+	}
+	ps.mu.RLock()
+	rec := &metadb.PlaybackRecord{
+		Path:        ps.Path,
+		Hash:        ps.Hash,
+		ImdbID:      ps.ImdbID,
+		OpenedAt:    ps.OpenedAt,
+		ConfirmedAt: ps.ConfirmedAt,
+		IsHealthy:   ps.IsHealthy,
+		IsStopped:   ps.IsStopped,
+		LastReadAt:  ps.LastReadAt,
+		ReadCount:   ps.ReadCount,
+		LastSeekOff: ps.LastSeekOff,
+	}
+	ps.mu.RUnlock()
+	if err := stateDB.SavePlaybackState(rec); err != nil {
+		logger.Printf("[V750] Failed to persist playback state for %s: %v", filepath.Base(rec.Path), err)
+	}
+}
+
+// V750: Restore PlaybackState from SQLite at boot
+func restorePlaybackStates(db *metadb.DB) {
+	records, err := db.LoadPlaybackStates(4 * time.Hour)
+	if err != nil {
+		logger.Printf("[V750] Failed to load playback states: %v", err)
+		return
+	}
+	restored := 0
+	for _, rec := range records {
+		if rec.IsHealthy && !rec.ConfirmedAt.IsZero() {
+			ps := &PlaybackState{
+				Path:        rec.Path,
+				Hash:        rec.Hash,
+				ImdbID:      rec.ImdbID,
+				OpenedAt:    rec.OpenedAt,
+				ConfirmedAt: rec.ConfirmedAt,
+				IsHealthy:   true,
+				ReadCount:   rec.ReadCount,
+				LastSeekOff: rec.LastSeekOff,
+				LastReadAt:  rec.LastReadAt,
+			}
+			playbackRegistry.Store(rec.Path, ps)
+			// Restore GoStorm priority
+			if rec.Hash != "" {
+				hHash := metainfo.NewHashFromHex(rec.Hash)
+				if t := web.BTS.GetTorrent(hHash); t != nil {
+					t.IsPriority = true
+					t.SetAggressiveMode(true, GetEffectiveConcurrencyLimit())
+					logger.Printf("[V750] Priority RESTORED from DB: %s", filepath.Base(rec.Path))
+				}
+			}
+			restored++
+		}
+	}
+	logger.Printf("[V750] Restored %d/%d playback states from DB", restored, len(records))
 }
 
 //go:embed settings.html
@@ -2912,6 +3026,8 @@ func main() {
 					logger.Printf("WARNING: Failed to reload InodeMap from DB: %v", err)
 				}
 				SetRegistryDB(stateDB)
+				// V750: Restore playback states from previous sessions
+				restorePlaybackStates(stateDB)
 				logger.Printf("[StateDB] Active: %s", dbPath)
 			}
 		}

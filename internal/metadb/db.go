@@ -128,7 +128,28 @@ CREATE TABLE IF NOT EXISTS tv_episodes (
     updated_at    TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tv_hash ON tv_episodes(hash);
+
+CREATE TABLE IF NOT EXISTS playback_states (
+    path          TEXT PRIMARY KEY,
+    hash          TEXT,
+    imdb_id       TEXT,
+    opened_at     TEXT,
+    confirmed_at  TEXT,
+    is_healthy    INTEGER DEFAULT 0,
+    is_stopped    INTEGER DEFAULT 0,
+    last_read_at  TEXT,
+    read_count    INTEGER DEFAULT 0,
+    last_seek_off INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_playback_hash ON playback_states(hash);
+CREATE INDEX IF NOT EXISTS idx_playback_healthy ON playback_states(is_healthy);
 `
 	_, err := d.db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// V750: Register schema version for playback_states
+	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (2, 'add playback_states table')`)
+	return nil
 }
