@@ -1104,10 +1104,23 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		}
 	}
 	defer func() {
+		// V306: Check if pump exited during confirmed healthy playback — this is
+		// unexpected and usually indicates an I/O error or cancellation. Log for diagnosis.
+		pumpExitedHealthy := false
+		if val, ok := playbackRegistry.Load(h.path); ok {
+			if ps, ok := val.(*PlaybackState); ok && ps.GetStatus() {
+				pumpExitedHealthy = true
+			}
+		}
+
 		h.mu.Lock()
 		// Only delete if our sharedState is still the registered one (prevents pump A's defer from deleting pump B).
 		if val, ok := activePumps.Load(h.path); ok && val == sharedState {
 			activePumps.Delete(h.path)
+		}
+
+		if pumpExitedHealthy {
+			logger.Printf("[V306] WARNING: pump goroutine exited during healthy playback for %s — priority preserved via IsHealthy", filepath.Base(h.path))
 		}
 
 		if h.hasSlot {
@@ -1917,6 +1930,16 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 		if _, pumpOk := activePumps.Load(h.path); pumpOk {
 			logger.Printf("[V750] Priority retained — pump still active for %s", filepath.Base(h.path))
 			return
+		}
+
+		// V306: Don't remove priority if playback is confirmed healthy — even if
+		// pump goroutine exited unexpectedly, the torrent must stay alive for the
+		// next Read() to create a new pump without a gap.
+		if val, ok := playbackRegistry.Load(h.path); ok {
+			if pbState := val.(*PlaybackState); pbState.GetStatus() {
+				logger.Printf("[V306] Priority retained — healthy playback confirmed for %s", filepath.Base(h.path))
+				return
+			}
 		}
 
 		// O(1): controlla se il path ha ancora handle aperti prima di disabilitare priority.
