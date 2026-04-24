@@ -374,19 +374,16 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 
 	// Get streams
 	e.logger.Printf("[MovieSync] Processing: %s (%s)", title, imdbID)
-	streams, err := e.getMovieStreams(ctx, imdbID, title)
-	if err != nil || len(streams) == 0 {
-		e.setCache(e.noStreamsCache, imdbID, CacheEntry{Title: title, TS: time.Now().Unix()})
+	candidates, hadRaw, err := e.getMovieStreams(ctx, imdbID, title)
+	if err != nil || len(candidates) == 0 {
+		if hadRaw {
+			e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_valid_stream", TS: time.Now().Unix()})
+		} else {
+			e.setCache(e.noStreamsCache, imdbID, CacheEntry{Title: title, TS: time.Now().Unix()})
+		}
 		return false
 	}
 	delete(e.noStreamsCache, imdbID)
-
-	// Filter: 4K first, then 1080p fallback
-	candidates := e.filterMovieStreams(streams)
-	if len(candidates) == 0 {
-		e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_valid_stream", TS: time.Now().Unix()})
-		return false
-	}
 
 	// Check if we already have this movie
 	existingPath := existing.path
@@ -476,19 +473,25 @@ type MovieStream struct {
 	SizeGB       float64
 }
 
-func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title string) ([]prowlarr.Stream, error) {
+func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title string) ([]MovieStream, bool, error) {
+	hadRaw := false
+
 	// Prowlarr first
 	if e.prowlarr != nil {
 		streams := e.prowlarr.FetchTorrents(imdbID, "movie", title)
-		if len(e.filterMovieStreams(streams)) > 0 {
-			return streams, nil
+		if len(streams) > 0 {
+			hadRaw = true
+			if candidates := e.filterMovieStreams(streams); len(candidates) > 0 {
+				return candidates, true, nil
+			}
+			// Prowlarr had streams but all filtered → fall through to Torrentio
 		}
 	}
 
 	// Torrentio fallback
 	tioStreams, err := e.torrentio.FetchMovieStreams(ctx, imdbID)
 	if err != nil {
-		return nil, err
+		return nil, hadRaw, err
 	}
 
 	var streams []prowlarr.Stream
@@ -497,10 +500,13 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 			Name:     s.Name,
 			Title:    s.Title,
 			InfoHash: s.InfoHash,
+			SizeGB:   float64(s.Size) / (1024 * 1024 * 1024),
 		})
 	}
-
-	return streams, nil
+	if len(streams) > 0 {
+		hadRaw = true
+	}
+	return e.filterMovieStreams(streams), hadRaw, nil
 }
 
 func (e *MovieGoEngine) filterMovieStreams(streams []prowlarr.Stream) []MovieStream {
@@ -554,7 +560,7 @@ func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) (*MovieStream, st
 	}
 
 	seeders := e.extractMovieSeeders(title)
-	if seeders > 0 && seeders < mMovieMinSeeders {
+	if seeders < mMovieMinSeeders {
 		return nil, "low_seeders"
 	}
 
