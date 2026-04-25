@@ -14,8 +14,8 @@ RUN apt-get update \
 WORKDIR /src
 
 COPY ./src/go.mod ./src/go.sum ./
-COPY ./src/internal/anacrolix-torrent-v1.55/go.mod ./internal/anacrolix-torrent-v1.55/go.mod
-COPY ./src/internal/anacrolix-torrent-v1.55/go.sum ./internal/anacrolix-torrent-v1.55/go.sum
+COPY ./src/internal/anacrolix-torrent/go.mod ./internal/anacrolix-torrent/go.mod
+COPY ./src/internal/anacrolix-torrent/go.sum ./internal/anacrolix-torrent/go.sum
 RUN go mod download
 
 COPY ./src/. ./

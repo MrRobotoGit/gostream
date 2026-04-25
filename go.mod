@@ -5,7 +5,7 @@ go 1.24.0
 require github.com/hanwen/go-fuse/v2 v2.9.0
 
 replace (
-	github.com/anacrolix/torrent => ./internal/anacrolix-torrent-v1.55
+	github.com/anacrolix/torrent => ./internal/anacrolix-torrent
 	github.com/anacrolix/upnp v0.1.4 => github.com/tsynik/upnp v0.1.5
 )
 
