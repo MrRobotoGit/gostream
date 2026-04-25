@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"gostream/internal/cache"
+	"gostream/internal/vfs"
 )
 
 // StartupCacheBuilder pre-populates metadata cache at startup
@@ -13,7 +16,7 @@ import (
 // Runs in background to avoid delaying mount operation
 type StartupCacheBuilder struct {
 	sourcePath string
-	cache      *LRUCache
+	metaCache   *cache.LRUCache
 	logger     *log.Logger
 
 	// Statistics
@@ -26,10 +29,10 @@ type StartupCacheBuilder struct {
 }
 
 // NewStartupCacheBuilder creates a new startup cache builder
-func NewStartupCacheBuilder(sourcePath string, cache *LRUCache, logger *log.Logger) *StartupCacheBuilder {
+func NewStartupCacheBuilder(sourcePath string, metaCache *cache.LRUCache, logger *log.Logger) *StartupCacheBuilder {
 	return &StartupCacheBuilder{
 		sourcePath: sourcePath,
-		cache:      cache,
+		metaCache:  metaCache,
 		logger:     logger,
 		startTime:  time.Now(),
 		foundFiles: make(map[string]bool),
@@ -66,7 +69,7 @@ func (b *StartupCacheBuilder) Start() {
 			processed, skipped, errors, duration)
 
 		// Log cache statistics
-		stats := b.cache.Stats()
+		stats := b.metaCache.Stats()
 		b.logger.Printf("Cache after startup: %d entries, %.2f MB used of %.2f MB capacity",
 			stats.Entries, float64(stats.Size)/(1024*1024), float64(stats.Capacity)/(1024*1024))
 
@@ -134,7 +137,7 @@ func (b *StartupCacheBuilder) processDirectory(dirPath string, recursive bool) {
 		}
 
 		// Check if already in cache (fast path)
-		if _, ok := b.cache.Get(path); ok {
+		if _, ok := b.metaCache.Get(path); ok {
 			b.incrementSkipped()
 			return nil
 		}
@@ -166,7 +169,7 @@ func (b *StartupCacheBuilder) processDirectory(dirPath string, recursive bool) {
 // processFile reads metadata for a single file and adds to cache
 func (b *StartupCacheBuilder) processFile(path string) {
 	// Read metadata from file
-	fileMeta, err := ReadMetadataFromFile(path)
+	fileMeta, err := vfs.ReadMetadataFromFile(path)
 	if err != nil {
 		b.logger.Printf("Startup cache: error reading metadata for %s: %v", path, err)
 		b.incrementErrors()
@@ -174,7 +177,7 @@ func (b *StartupCacheBuilder) processFile(path string) {
 	}
 
 	// Convert to Metadata format
-	meta := &Metadata{
+	meta := &vfs.Metadata{
 		URL:    fileMeta.URL,
 		Size:   fileMeta.Size,
 		Mtime:  fileMeta.Mtime,
@@ -186,7 +189,7 @@ func (b *StartupCacheBuilder) processFile(path string) {
 	size := approximateMetadataSize(meta)
 
 	// Add to cache
-	b.cache.Put(path, meta, size)
+	b.metaCache.Put(path, meta, size)
 
 	// V133: Add to inode map for deterministic inode generation
 	// This ensures Plex sees the same inode after restarts

@@ -1,4 +1,4 @@
-package main
+package vfs
 
 import (
 	"encoding/json"
@@ -10,6 +10,13 @@ import (
 	"strings"
 	"time"
 )
+
+// Metadata is the in-memory representation used by the cache layer.
+type Metadata struct {
+	URL, Path, ImdbID string
+	Size              int64
+	Mtime             time.Time
+}
 
 // FileMetadata represents metadata extracted from a virtual .mkv file
 type FileMetadata struct {
@@ -35,8 +42,8 @@ var (
 	ErrInvalidURL    = errors.New("stream URL must start with http:// or https://")
 )
 
-// mkvJSON is the internal JSON representation of a .mkv file.
-type mkvJSON struct {
+// MkvJSON is the internal JSON representation of a .mkv file.
+type MkvJSON struct {
 	URL    string `json:"url"`
 	Size   int64  `json:"size"`
 	Magnet string `json:"magnet"`
@@ -71,7 +78,7 @@ func ReadMetadataFromFile(path string) (*FileMetadata, error) {
 }
 
 func parseJSONFormat(content string, info os.FileInfo, path string) (*FileMetadata, error) {
-	var j mkvJSON
+	var j MkvJSON
 	if err := json.Unmarshal([]byte(content), &j); err != nil {
 		return nil, fmt.Errorf("parse JSON: %w", err)
 	}
@@ -150,7 +157,7 @@ func parseLineFormat(content string, info os.FileInfo, path string) (*FileMetada
 
 // WriteMetadataToFile writes metadata to a virtual .mkv file in JSON format.
 func WriteMetadataToFile(path, url string, size int64, imdbID string) error {
-	j := mkvJSON{
+	j := MkvJSON{
 		URL:    url,
 		Size:   size,
 		Magnet: "",

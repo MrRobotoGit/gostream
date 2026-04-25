@@ -9,20 +9,32 @@ import (
 	"flag"
 	"fmt"
 	"github.com/cespare/xxhash/v2"
-	"gostream/ai"
+	"gostream/internal/ai"
+	"gostream/internal/cache"
+	"gostream/internal/config"
 	server "gostream/internal/gostorm"
+	"gostream/internal/gostorm/native"
 	"gostream/internal/gostorm/settings"
 	torrstor "gostream/internal/gostorm/torr/storage/torrstor"
 	tsutils "gostream/internal/gostorm/utils"
 	"gostream/internal/gostorm/web"
+	"gostream/internal/lockmgr"
 	"gostream/internal/metadb"
+	"gostream/internal/natpmp"
 	"gostream/internal/monitor/collector"
 	"gostream/internal/monitor/dashboard"
 	"gostream/internal/opentracker"
+	"gostream/internal/preload"
 	"gostream/internal/prowlarr"
+	"gostream/internal/ratelimit"
+	"gostream/internal/registry"
+	"gostream/internal/telemetry"
+	syncercache "gostream/internal/syncer/cache"
 	"gostream/internal/syncer/engines"
 	"gostream/internal/syncer/scheduler"
 	"gostream/internal/updater"
+	"gostream/internal/vfs"
+	"gostream/internal/warmup"
 	"io"
 	"log"
 	"net"
@@ -58,19 +70,20 @@ var httpClient *http.Client
 var masterDataSemaphore chan struct{}
 
 var startTime = time.Now()
-var metaCache *LRUCache
+var metaCache *cache.LRUCache
 var raCache = newReadAheadCache()
 
-var globalRateLimiter *RateLimiter
-var globalLockManager *LockManager
+var globalRateLimiter *ratelimit.RateLimiter
+var globalLockManager *lockmgr.LockManager
+var globalDirCache *vfs.DirCache
 
 // Global peer-based preloader (FASE 2 - Performance)
-var peerPreloader *PeerPreloader
-var nativeBridge *NativeClient
+var peerPreloader *preload.PeerPreloader
+var nativeBridge *native.NativeClient
 
 var globalCleanupManager *CleanupManager
 var globalTorrentRemover *TorrentRemover
-var globalConfig Config
+var globalConfig config.Config
 
 // Global Prowlarr client for indexer queries (nil when disabled).
 var prowlarrClient *prowlarr.Client
@@ -133,7 +146,7 @@ func (ps *PlaybackState) GetStatus() bool {
 var playbackRegistry sync.Map // path -> *PlaybackState
 
 // Global sync cache manager (FASE 4.13 - Sync Script Caches)
-var globalSyncCacheManager *SyncCacheManager
+var globalSyncCacheManager *syncercache.SyncCacheManager
 
 // StateDB is the optional SQLite backend for persistent state.
 var stateDB *metadb.DB
@@ -167,7 +180,7 @@ var pumpCreationMu sync.Mutex
 // NativePumpState tracks a shared pump across multiple handles for the same file.
 type NativePumpState struct {
 	cancel    context.CancelFunc
-	reader    *NativeReader
+	reader    *native.NativeReader
 	path      string
 	refCount  int32
 	playerOff int64 // last known player position, saved on handle release
@@ -256,12 +269,6 @@ func resolveTargetFile(url string, targetSize int64, physicalPath string) (strin
 // Uses POSIX bits (syscall.S_IFDIR/S_IFREG) for FUSE/Samba/kernel compatibility.
 func hashFilenameToInode(name string) uint64 {
 	return xxhash.Sum64String(name)
-}
-
-type Metadata struct {
-	URL, Path, ImdbID string
-	Size              int64
-	Mtime             time.Time
 }
 
 // ReadTiming collects per-read latency metrics for profiling.
@@ -360,7 +367,7 @@ func fillAttrFromStat(st *syscall.Stat_t, out *fuse.Attr) {
 }
 
 // fillAttrFromMetadata populates FUSE attributes from our internal Metadata.
-func fillAttrFromMetadata(m *Metadata, out *fuse.Attr) {
+func fillAttrFromMetadata(m *vfs.Metadata, out *fuse.Attr) {
 	out.Size = uint64(m.Size)
 	out.Mode = syscall.S_IFREG | 0644
 	out.Uid, out.Gid = globalConfig.UID, globalConfig.GID
@@ -392,13 +399,13 @@ func (r *VirtualMkvRoot) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 	st := syscall.Stat_t{}
 	if err := syscall.Stat(r.sourcePath, &st); err != nil {
 		logger.Printf("ROOT GETATTR ERROR: stat failed for %s: %v", r.sourcePath, err)
-		return ToErrno(err)
+		return vfs.ToErrno(err)
 	}
 
 	fillAttrFromStat(&st, &out.Attr)
 
 	// Root inode must be constant (required by Plex).
-	out.Ino = InodeRoot
+	out.Ino = vfs.InodeRoot
 	out.Mode = syscall.S_IFDIR | 0755
 	out.Size = 4096
 
@@ -491,7 +498,7 @@ func (r *VirtualMkvRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	entries, err := os.ReadDir(r.sourcePath)
 	if err != nil {
 		logger.Printf("READDIR ERROR: %v", err)
-		return nil, ToErrno(err)
+		return nil, vfs.ToErrno(err)
 	}
 
 	result := make([]fuse.DirEntry, 0, len(entries))
@@ -571,7 +578,7 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	entries, err := os.ReadDir(d.physicalPath)
 	if err != nil {
 		logger.Printf("READDIR DIR ERROR: %v", err)
-		return nil, ToErrno(err)
+		return nil, vfs.ToErrno(err)
 	}
 
 	result := make([]fuse.DirEntry, 0, len(entries))
@@ -650,7 +657,7 @@ func (d *VirtualDirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 	st := syscall.Stat_t{}
 	if err := syscall.Stat(d.physicalPath, &st); err != nil {
 		logger.Printf("GETATTR DIR ERROR: %v", err)
-		return ToErrno(err)
+		return vfs.ToErrno(err)
 	}
 
 	fillAttrFromStat(&st, &out.Attr)
@@ -724,10 +731,10 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	// Delete physical .mkv file
 	if err := os.Remove(fullPath); err != nil {
 		logger.Printf("UNLINK ERROR: failed to delete file: %v", err)
-		return ToErrno(err)
+		return vfs.ToErrno(err)
 	}
 
-	RemoveFromRegistry(fullPath)
+	registry.RemoveFromRegistry(fullPath)
 	globalDirCache.Delete(d.physicalPath)
 
 	logger.Printf("UNLINK COMPLETE: file deleted successfully")
@@ -737,7 +744,7 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 // VirtualMkvNode - nodo per singolo file .mkv virtuale
 type VirtualMkvNode struct {
 	fs.Inode
-	vMeta *Metadata
+	vMeta *vfs.Metadata
 }
 
 // Compile-time interface checks
@@ -766,13 +773,13 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		oldTimer.(*time.Timer).Stop()
 	}
 
-	hashStr, urlFileIdx := ExtractHashAndIndex(n.vMeta.URL)
+	hashStr, urlFileIdx := vfs.ExtractHashAndIndex(n.vMeta.URL)
 
 	// hasFullWarmup: Open returns instantly only if both head and tail warmup files are ready.
 	// headReady: Allows async Wake and direct ID injection for instant start.
 	headReady := false
-	if diskWarmup != nil && hashStr != "" {
-		headReady = diskWarmup.GetAvailableRange(hashStr, urlFileIdx) > 0
+	if warmup.DiskWarmup != nil && hashStr != "" {
+		headReady = warmup.DiskWarmup.GetAvailableRange(hashStr, urlFileIdx) > 0
 	}
 
 	magnetCandidate := n.vMeta.URL
@@ -900,7 +907,7 @@ type MkvHandle struct {
 	monitorStarted   bool
 	lastGlobalUpdate time.Time
 
-	nativeReader    *NativeReader
+	nativeReader    *native.NativeReader
 	hash            string
 	magnet          string
 	fileID          int
@@ -1017,8 +1024,8 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		resumeOffset := raCache.MaxCachedOffset(h.path)
 
 		// Start pump near end of warmup zone so it buffers past 64MB before SSD handover.
-		if diskWarmup != nil && h.hash != "" {
-			diskOffset := diskWarmup.GetAvailableRange(h.hash, h.fileID)
+		if warmup.DiskWarmup != nil && h.hash != "" {
+			diskOffset := warmup.DiskWarmup.GetAvailableRange(h.hash, h.fileID)
 			if diskOffset > 16*1024*1024 {
 				safetyMargin := int64(16 * 1024 * 1024)
 				skipOffset := diskOffset - safetyMargin
@@ -1043,12 +1050,12 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			}
 		} else if playerOff < 0 && resumeOffset > 0 {
 			// New handle: reset stale MaxCachedOffset unless warmup is active and covers the range.
-			// If resumeOffset >= warmupFileSize, pump skip cannot fire → dead zone in raCache.
+			// If resumeOffset >= warmup.FileSize, pump skip cannot fire → dead zone in raCache.
 			warmupCoverage := int64(0)
-			if diskWarmup != nil && h.hash != "" {
-				warmupCoverage = diskWarmup.GetAvailableRange(h.hash, h.fileID)
+			if warmup.DiskWarmup != nil && h.hash != "" {
+				warmupCoverage = warmup.DiskWarmup.GetAvailableRange(h.hash, h.fileID)
 			}
-			if warmupCoverage == 0 || resumeOffset >= warmupFileSize {
+			if warmupCoverage == 0 || resumeOffset >= warmup.FileSize {
 				logger.Printf("[V700] New handle: reset stale MaxCachedOffset %.1fMB → 0",
 					float64(resumeOffset)/(1<<20))
 				resumeOffset = 0
@@ -1249,7 +1256,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 }
 
 // nativePumpChunk reads a single chunk from the Native pipe into raCache.
-func (h *MkvHandle) nativePumpChunk(r *NativeReader, offset, chunkSize, playerOff int64) (stop bool, nextOffset int64) {
+func (h *MkvHandle) nativePumpChunk(r *native.NativeReader, offset, chunkSize, playerOff int64) (stop bool, nextOffset int64) {
 	// Don't pump beyond file size
 	if offset >= h.size {
 		return true, offset
@@ -1274,16 +1281,16 @@ func (h *MkvHandle) nativePumpChunk(r *NativeReader, offset, chunkSize, playerOf
 	}
 
 	if data := raCache.Get(h.path, offset, offset); data != nil {
-		if diskWarmup != nil && h.hash != "" && offset <= warmupFileSize {
-			diskWarmup.WriteChunk(h.hash, h.fileID, data, offset)
+		if warmup.DiskWarmup != nil && h.hash != "" && offset <= warmup.FileSize {
+			warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, data, offset)
 		}
 		return false, offset + chunkSize
 	}
 
 	// Skip warmup zone during initial play (SSD serves 0-80MB); pump jumps ahead to pre-fill raCache.
 	// Gated on stateWarmup to avoid skip on resume/seek.
-	if diskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup {
-		warmupCoverage := diskWarmup.GetAvailableRange(h.hash, h.fileID)
+	if warmup.DiskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup {
+		warmupCoverage := warmup.DiskWarmup.GetAvailableRange(h.hash, h.fileID)
 		if warmupCoverage >= offset+chunkSize {
 			return false, offset + chunkSize
 		}
@@ -1301,8 +1308,8 @@ func (h *MkvHandle) nativePumpChunk(r *NativeReader, offset, chunkSize, playerOf
 	n, err := r.ReadAt((*bufPtr)[:end-offset], offset)
 	if n > 0 {
 		raCache.Put(h.path, offset, offset+int64(n)-1, (*bufPtr)[:n])
-		if diskWarmup != nil && h.hash != "" && offset <= warmupFileSize {
-			diskWarmup.WriteChunk(h.hash, h.fileID, (*bufPtr)[:n], offset)
+		if warmup.DiskWarmup != nil && h.hash != "" && offset <= warmup.FileSize {
+			warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, (*bufPtr)[:n], offset)
 		}
 	}
 
@@ -1389,12 +1396,12 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	prevOff := atomic.LoadInt64(&h.lastOff)
 	atomic.StoreInt64(&h.lastOff, off)
 
-	// Transition WARMUP→STREAMING on resume (first read >= warmupFileSize) or seek (jump > budget).
+	// Transition WARMUP→STREAMING on resume (first read >= warmup.FileSize) or seek (jump > budget).
 	// Checked after SSD path above so initial reads within warmup zone are still served.
 	if h.state.Load() == stateWarmup {
 		isSeek := false
 		if prevOff == -1 {
-			if off >= warmupFileSize {
+			if off >= warmup.FileSize {
 				isSeek = true
 			}
 		} else if off != 0 {
@@ -1444,10 +1451,10 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 
 	// Serve warmup zone from SSD (up to 80MB with boundary chunk); stateWarmup gate skips SSD on resume/seek.
-	if diskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup {
-		warmupCoverage := diskWarmup.GetAvailableRange(h.hash, h.fileID)
+	if warmup.DiskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup {
+		warmupCoverage := warmup.DiskWarmup.GetAvailableRange(h.hash, h.fileID)
 		if off < warmupCoverage {
-			n, _ := diskWarmup.ReadAt(h.hash, h.fileID, dest, off)
+			n, _ := warmup.DiskWarmup.ReadAt(h.hash, h.fileID, dest, off)
 			if n > 0 {
 				timing.UsedCache = true
 				timing.BytesRead = n
@@ -1466,8 +1473,8 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 
 	// Serve tail from SSD only during discovery (pre-confirmation); post-confirmation uses pump.
-	if isTailProbe && diskWarmup != nil {
-		n, _ := diskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
+	if isTailProbe && warmup.DiskWarmup != nil {
+		n, _ := warmup.DiskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
 		if n > 0 {
 			timing.UsedCache = true
 			timing.BytesRead = n
@@ -1480,8 +1487,8 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		// On SSD tail miss, use stateless FetchBlock to preserve head pump.
 		nFetch, err := nativeBridge.FetchBlock(h.hash, h.fileID, off, dest)
 		if err == nil && nFetch > 0 {
-			if diskWarmup != nil {
-				diskWarmup.WriteTail(h.hash, h.fileID, dest[:nFetch], off, h.size)
+			if warmup.DiskWarmup != nil {
+				warmup.DiskWarmup.WriteTail(h.hash, h.fileID, dest[:nFetch], off, h.size)
 			}
 
 			timing.UsedCache = false
@@ -1662,7 +1669,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		defer rateLimitCancel()
 		if err := globalRateLimiter.Acquire(rateLimitCtx); err != nil {
 			logger.Printf("Rate limit timeout: %v", err)
-			return nil, ToErrno(err)
+			return nil, vfs.ToErrno(err)
 		}
 	}
 
@@ -1718,10 +1725,10 @@ DATA_READY:
 	if n > 0 {
 		raCache.Put(h.path, off, off+int64(n)-1, buf[:n])
 
-		if diskWarmup != nil && h.hash != "" {
-			if off <= warmupFileSize {
-				diskWarmup.WriteChunk(h.hash, h.fileID, buf[:n], off)
-			} else if h.size > tailWarmupSize && off >= h.size-tailWarmupSize {
+		if warmup.DiskWarmup != nil && h.hash != "" {
+			if off <= warmup.FileSize {
+				warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, buf[:n], off)
+			} else if h.size > warmup.TailWarmupSize && off >= h.size-warmup.TailWarmupSize {
 				// Freeze tail SSD cache after playback confirmation to preserve discovery snapshot.
 				isConfirmed := false
 				if val, ok := playbackRegistry.Load(h.path); ok {
@@ -1731,7 +1738,7 @@ DATA_READY:
 					ps.mu.RUnlock()
 				}
 				if !isConfirmed {
-					diskWarmup.WriteTail(h.hash, h.fileID, buf[:n], off, h.size)
+					warmup.DiskWarmup.WriteTail(h.hash, h.fileID, buf[:n], off, h.size)
 				}
 			}
 		}
@@ -1994,7 +2001,7 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 
 // approximateMetadataSize estimates the memory footprint of a Metadata entry
 // Used for LRU cache size tracking
-func approximateMetadataSize(m *Metadata) int64 {
+func approximateMetadataSize(m *vfs.Metadata) int64 {
 	// Approximate size:
 	// - URL string: len(URL)
 	// - Path string: len(Path)
@@ -2004,8 +2011,8 @@ func approximateMetadataSize(m *Metadata) int64 {
 	return int64(len(m.URL) + len(m.Path) + 8 + 24 + 64)
 }
 
-func getOrReadMeta(path string) (*Metadata, error) {
-	var m *Metadata
+func getOrReadMeta(path string) (*vfs.Metadata, error) {
+	var m *vfs.Metadata
 
 	// Check cache first (fast path without lock)
 	if val, ok := metaCache.Get(path); ok {
@@ -2019,12 +2026,12 @@ func getOrReadMeta(path string) (*Metadata, error) {
 		if val, ok := metaCache.Get(path); ok {
 			m = val
 		} else {
-			fileMeta, err := ReadMetadataFromFile(path)
+			fileMeta, err := vfs.ReadMetadataFromFile(path)
 			if err != nil {
 				return nil, err
 			}
 
-			m = &Metadata{
+			m = &vfs.Metadata{
 				URL:    fileMeta.URL,
 				Size:   fileMeta.Size,
 				Mtime:  fileMeta.Mtime,
@@ -2872,9 +2879,9 @@ func main() {
 
 	source, mount := flag.Arg(0), flag.Arg(1)
 
-	globalConfig = LoadConfig()
+	globalConfig = config.LoadConfig()
 	prowlarrClient = prowlarr.NewClient(globalConfig.Prowlarr)
-	SendHeartbeat(globalConfig)
+	telemetry.SendHeartbeat(globalConfig, AppVersion)
 	logger.Printf("[DEBUG] BlockListURL loaded: '%s'", globalConfig.BlockListURL)
 
 	if dbPath != "" {
@@ -2913,16 +2920,16 @@ func main() {
 	// Give engine a moment to init (hash maps etc)
 	time.Sleep(2 * time.Second)
 
-	InitDiskWarmup()
-	go StartRegistryWatchdog(backgroundStopChan)
-	go natpmpLoop(backgroundStopChan, globalConfig.NatPMP, logger)
+	warmup.InitDiskWarmup(globalConfig.DiskWarmupQuotaGB)
+	go registry.StartRegistryWatchdog(backgroundStopChan)
+	go natpmp.NatpmpLoop(backgroundStopChan, globalConfig.NatPMP, logger)
 
 	masterDataSemaphore = make(chan struct{}, globalConfig.MasterConcurrencyLimit)
 	startHandleGC()
 
 	// Initialize global helpers
-	globalRateLimiter = NewRateLimiter(globalConfig.RateLimitRequestsPerSec, 1*time.Second)
-	globalLockManager = NewLockManager(1 * time.Hour)
+	globalRateLimiter = ratelimit.NewRateLimiter(globalConfig.RateLimitRequestsPerSec, 1*time.Second)
+	globalLockManager = lockmgr.NewLockManager(1 * time.Hour)
 
 	poolSize := int(globalConfig.ReadAheadBase)
 	if poolSize == 0 {
@@ -2964,7 +2971,7 @@ func main() {
 	logger.Printf("HTTP client initialized: ConnectTimeout=%v, ReadTimeout=%v, MaxIdleConns=%d, MaxIdleConnsPerHost=%d, MaxConnsPerHost=%d (V81-optimized)",
 		globalConfig.HTTPConnectTimeout, globalConfig.HTTPReadTimeout, globalConfig.MaxIdleConns, globalConfig.MaxIdleConnsPerHost, globalConfig.MaxConnsPerHost)
 
-	nativeBridge = NewNativeClient()
+	nativeBridge = native.NewNativeClient()
 
 	if globalConfig.AIURL != "" {
 		provider := ai.AIProvider{
@@ -3011,18 +3018,17 @@ func main() {
 		updater.Start(AppVersion, backgroundStopChan)
 	})
 
-	peerPreloader = NewPeerPreloader(nativeBridge)
+	peerPreloader = preload.NewPeerPreloader(nativeBridge)
 
 	// Metadata LRU cache: capacity from config, 24h TTL.
-	metaCache = NewLRUCache(globalConfig.MetadataCacheSize, 24*time.Hour)
+	metaCache = cache.NewLRUCache(globalConfig.MetadataCacheSize, 24*time.Hour)
 
 	// Deterministic inode map ensures Plex doesn't see "new files" after restarts.
-	inodeMapPath := filepath.Join(GetStateDir(), "inode_map.json")
-	if err := InitGlobalInodeMap(inodeMapPath, logger); err != nil {
+	if err := InitGlobalInodeMap(GetStateDir(), logger); err != nil {
 		logger.Printf("WARNING: Failed to initialize inode map: %v (falling back to filename hash)", err)
 	} else {
 		files, dirs, _, _ := GetInodeMapStats()
-		logger.Printf("InodeMap: Initialized with %d files, %d dirs from %s", files, dirs, inodeMapPath)
+		logger.Printf("InodeMap: Initialized with %d files, %d dirs from %s", files, dirs, vfs.GetDefaultInodeMapPath(GetStateDir()))
 	}
 
 	// V1.7.1: Optional SQLite State DB for unified persistence.
@@ -3048,9 +3054,10 @@ func main() {
 				if err := globalInodeMap.LoadFromDisk(); err != nil {
 					logger.Printf("WARNING: Failed to reload InodeMap from DB: %v", err)
 				}
-				SetRegistryDB(stateDB)
+				registry.SetRegistryDB(stateDB)
 				// V750: Restore playback states from previous sessions
 				restorePlaybackStates(stateDB)
+				registry.SetStateDir(GetStateDir())
 				logger.Printf("[StateDB] Active: %s", dbPath)
 			}
 		}
@@ -3064,7 +3071,7 @@ func main() {
 	globalCleanupManager.Start()
 
 	globalTorrentRemover = NewTorrentRemover(nativeBridge, logger)
-	globalSyncCacheManager = NewSyncCacheManager(GetStateDir(), logger)
+	globalSyncCacheManager = syncercache.NewSyncCacheManager(GetStateDir(), logger)
 
 	// V1.7.1: Wire up StateDB to sync cache manager (after it's created)
 	if stateDB != nil {
@@ -3106,7 +3113,7 @@ func main() {
 		}
 	}()
 
-	globalDirCache = NewDirCache(10 * time.Second)
+	globalDirCache = vfs.NewDirCache(10 * time.Second)
 
 	http.HandleFunc("/plex/webhook", handlePlexWebhook)
 
@@ -3124,7 +3131,7 @@ func main() {
 		raActivePercent := float64(raActive) / float64(raBudget) * 100
 		raStalePercent := float64(raStale) / float64(raBudget) * 100
 
-		natPort := atomic.LoadInt64(&currentNatPort)
+		natPort := atomic.LoadInt64(&natpmp.CurrentNatPort)
 
 		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t}`,
 			AppVersion,
@@ -3175,7 +3182,7 @@ func main() {
 			return
 		}
 		if r.Method == "POST" {
-			var newCfg Config
+			var newCfg config.Config
 			if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 				http.Error(w, err.Error(), 400)
 				return
@@ -3188,7 +3195,7 @@ func main() {
 			}
 			// Reload in memory (V1.4.0 Live Update)
 			oldURL := globalConfig.BlockListURL
-			globalConfig = LoadConfig()
+			globalConfig = config.LoadConfig()
 			prowlarrClient = prowlarr.NewClient(globalConfig.Prowlarr)
 			if globalConfig.BlockListURL != "" && globalConfig.BlockListURL != oldURL {
 				safeGo(func() {
@@ -3611,4 +3618,81 @@ func updateBlockList(urlStr string) {
 	}
 
 	logger.Printf("[BlockList] Updated successfully: %d bytes saved to %s", n, destPath)
+}
+
+// GetStateDir returns the centralized state directory path.
+func GetStateDir() string {
+	if globalConfig.RootPath == "" {
+		return "/home/pi/STATE"
+	}
+	return filepath.Join(globalConfig.RootPath, "STATE")
+}
+
+// --- InodeMap globals & wrappers ---
+
+var globalInodeMap *vfs.InodeMap
+
+func InitGlobalInodeMap(stateDir string, logger *log.Logger) error {
+	savePath := vfs.GetDefaultInodeMapPath(stateDir)
+	dir := filepath.Dir(savePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create inode map directory: %w", err)
+	}
+	globalInodeMap = vfs.NewInodeMap(savePath, &vfsLogger{logger})
+	if err := globalInodeMap.LoadFromDisk(); err != nil {
+		return fmt.Errorf("load inode map: %w", err)
+	}
+	globalInodeMap.StartBackgroundSaver()
+	return nil
+}
+
+func ShutdownGlobalInodeMap() {
+	if globalInodeMap != nil {
+		globalInodeMap.Stop()
+	}
+}
+
+func getFileInodeFromMap(fullPath string) uint64 {
+	if globalInodeMap == nil {
+		return hashFilenameToInode(filepath.Base(fullPath)) & vfs.InodeFileMask
+	}
+	if inode := globalInodeMap.GetFileInode(fullPath); inode != 0 {
+		return inode
+	}
+	if inode := globalInodeMap.GetFileInodeByName(filepath.Base(fullPath)); inode != 0 {
+		return inode
+	}
+	return hashFilenameToInode(filepath.Base(fullPath)) & vfs.InodeFileMask
+}
+
+func getDirInodeFromMap(relativePath string) uint64 {
+	if globalInodeMap == nil {
+		return vfs.GenerateDirInode(relativePath)
+	}
+	return globalInodeMap.GetDirInode(relativePath)
+}
+
+func addFileToInodeMap(fullPath, url string) uint64 {
+	if globalInodeMap == nil {
+		return 0
+	}
+	hash, index := vfs.ExtractHashAndIndex(url)
+	if hash == "" {
+		return 0
+	}
+	return globalInodeMap.AddFile(fullPath, hash, index)
+}
+
+func GetInodeMapStats() (files, dirs, hits, misses int64) {
+	if globalInodeMap == nil {
+		return 0, 0, 0, 0
+	}
+	return globalInodeMap.Stats()
+}
+
+// vfsLogger adapts *log.Logger to the vfs.Logger interface.
+type vfsLogger struct{ logger *log.Logger }
+
+func (l *vfsLogger) Printf(format string, args ...interface{}) {
+	l.logger.Printf(format, args...)
 }

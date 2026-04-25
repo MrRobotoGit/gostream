@@ -1,4 +1,4 @@
-package main
+package vfs
 
 import (
 	"encoding/json"
@@ -487,7 +487,7 @@ func (im *InodeMap) AddFile(fullPath, infohash string, index int) uint64 {
 	}
 
 	key := fmt.Sprintf("%s:%d", strings.ToLower(infohash), index)
-	inode := generateFileInode(infohash, index)
+	inode := GenerateFileInode(infohash, index)
 
 	sName := im.getShard(fullPath)
 	sFile := im.getShard(key)
@@ -514,7 +514,7 @@ func (im *InodeMap) AddFile(fullPath, infohash string, index int) uint64 {
 }
 
 func (im *InodeMap) AddDir(relativePath string) uint64 {
-	inode := generateDirInode(relativePath)
+	inode := GenerateDirInode(relativePath)
 	s := im.getShard(relativePath)
 
 	s.mu.Lock()
@@ -655,12 +655,12 @@ func (im *InodeMap) PruneMissing(foundFiles map[string]bool) int {
 
 // --- Helper functions for extracting hash and index from URLs ---
 
-func generateFileInode(infohash string, index int) uint64 {
+func GenerateFileInode(infohash string, index int) uint64 {
 	key := fmt.Sprintf("%s:%d", strings.ToLower(infohash), index)
 	return xxhash.Sum64String(key) & InodeFileMask
 }
 
-func generateDirInode(relativePath string) uint64 {
+func GenerateDirInode(relativePath string) uint64 {
 	if relativePath == "/" || relativePath == "" {
 		return InodeRoot
 	}
@@ -700,74 +700,7 @@ func ExtractHashAndIndex(url string) (string, int) {
 	return hash, index
 }
 
-// --- Global inode map instance ---
-
-var globalInodeMap *InodeMap
-
-func InitGlobalInodeMap(savePath string, logger Logger) error {
-	dir := filepath.Dir(savePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create inode map directory: %w", err)
-	}
-
-	globalInodeMap = NewInodeMap(savePath, logger)
-	if err := globalInodeMap.LoadFromDisk(); err != nil {
-		return fmt.Errorf("load inode map: %w", err)
-	}
-	globalInodeMap.StartBackgroundSaver()
-	return nil
-}
-
-func ShutdownGlobalInodeMap() {
-	if globalInodeMap != nil {
-		globalInodeMap.Stop()
-	}
-}
-
-func getFileInodeFromMap(fullPath string) uint64 {
-	if globalInodeMap == nil {
-		return hashFilenameToInode(filepath.Base(fullPath)) & InodeFileMask
-	}
-	if inode := globalInodeMap.GetFileInode(fullPath); inode != 0 {
-		return inode
-	}
-	filename := filepath.Base(fullPath)
-	if inode := globalInodeMap.GetFileInodeByName(filename); inode != 0 {
-		return inode
-	}
-	return hashFilenameToInode(filename) & InodeFileMask
-}
-
-func getDirInodeFromMap(relativePath string) uint64 {
-	if globalInodeMap == nil {
-		return generateDirInode(relativePath)
-	}
-	return globalInodeMap.GetDirInode(relativePath)
-}
-
-func addFileToInodeMap(fullPath, url string) uint64 {
-	if globalInodeMap == nil {
-		return 0
-	}
-	hash, index := ExtractHashAndIndex(url)
-	if hash == "" {
-		return 0
-	}
-	return globalInodeMap.AddFile(fullPath, hash, index)
-}
-
-func GetInodeMapStats() (files, dirs, hits, misses int64) {
-	if globalInodeMap == nil {
-		return 0, 0, 0, 0
-	}
-	return globalInodeMap.Stats()
-}
-
-func GetInodeMapSavePath() string {
-	return filepath.Join(GetStateDir(), "inode_map.json")
-}
-
-func EnsureInodeMapDir() error {
-	dir := filepath.Dir(GetInodeMapSavePath())
-	return os.MkdirAll(dir, 0755)
+// GetDefaultInodeMapPath returns the default save path for the inode map.
+func GetDefaultInodeMapPath(stateDir string) string {
+	return filepath.Join(stateDir, "inode_map.json")
 }

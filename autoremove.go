@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"gostream/internal/gostorm/native"
+	"gostream/internal/vfs"
 )
 
 // TorrentRemover handles automatic torrent removal from GoStorm
@@ -17,13 +20,13 @@ import (
 // TorrentRemover handles automatic torrent removal from GoStorm
 // Extracts hash directly from .mkv file content and handles blacklisting
 type TorrentRemover struct {
-	nativeBridge *NativeClient // V160: Native Bridge
+	nativeBridge *native.NativeClient // V160: Native Bridge
 	logger       *log.Logger
 	hashPattern  *regexp.Regexp // Still useful for fallback
 }
 
 // NewTorrentRemover creates a new torrent remover
-func NewTorrentRemover(nativeBridge *NativeClient, logger *log.Logger) *TorrentRemover {
+func NewTorrentRemover(nativeBridge *native.NativeClient, logger *log.Logger) *TorrentRemover {
 	return &TorrentRemover{
 		nativeBridge: nativeBridge,
 		logger:       logger,
@@ -87,7 +90,7 @@ func (tr *TorrentRemover) extractHashFromFile(path string) string {
 
 	// Detect JSON format
 	if strings.HasPrefix(trimmed, "{") {
-		var j mkvJSON
+		var j vfs.MkvJSON
 		if err := json.Unmarshal([]byte(content), &j); err != nil {
 			return ""
 		}

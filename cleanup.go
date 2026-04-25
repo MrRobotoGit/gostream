@@ -7,7 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"gostream/internal/cache"
+	"gostream/internal/gostorm/native"
 	"gostream/internal/gostorm/torr"
+	"gostream/internal/preload"
 )
 
 // CleanupManager provides periodic cleanup of various in-memory structures
@@ -26,9 +29,9 @@ type CleanupManager struct {
 	activitiesMu   sync.RWMutex
 
 	// External components to clean (V238 Audit 1.A)
-	peerPreloader *PeerPreloader
-	metaCache     *LRUCache
-	nativeBridge  *NativeClient
+	peerPreloader *preload.PeerPreloader
+	metaCache     *cache.LRUCache
+	nativeBridge  *native.NativeClient
 
 	// Configuration
 	deletedHashTTL  time.Duration
@@ -51,7 +54,7 @@ type offsetEntry struct {
 }
 
 // NewCleanupManager creates a new cleanup manager with references to components
-func NewCleanupManager(logger *log.Logger, pp *PeerPreloader, mc *LRUCache, nb *NativeClient) *CleanupManager {
+func NewCleanupManager(logger *log.Logger, pp *preload.PeerPreloader, mc *cache.LRUCache, nb *native.NativeClient) *CleanupManager {
 	return &CleanupManager{
 		deletedHashes:   make(map[string]time.Time),
 		fileOffsets:     make(map[string]*offsetEntry),

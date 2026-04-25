@@ -1,4 +1,4 @@
-package main
+package vfs
 
 import (
 	"sync"
@@ -83,4 +83,4 @@ func (dc *DirCache) CleanupExpired() {
 }
 
 // Global instance
-var globalDirCache *DirCache
+

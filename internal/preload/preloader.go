@@ -1,4 +1,4 @@
-package main
+package preload
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"gostream/internal/gostorm/native"
 )
 
 // PreloadStrategy defines the preload size based on torrent download speed
@@ -31,19 +33,10 @@ const (
 )
 
 // TorrentStats represents torrent statistics from GoStorm API
-type TorrentStats struct {
-	Hash          string  `json:"hash"`
-	Title         string  `json:"title"`
-	DownloadSpeed float64 `json:"download_speed"` // bytes/sec
-	TotalPeers    int     `json:"total_peers"`
-	ActivePeers   int     `json:"active_peers"`
-	Downloaded    int64   `json:"downloaded"`
-}
-
 // PeerPreloader manages adaptive preload based on peer speed
 // PeerPreloader manages adaptive preload based on peer speed
 type PeerPreloader struct {
-	nativeBridge  *NativeClient // V160: Native Bridge
+	nativeBridge  *native.NativeClient // V160: Native Bridge
 	strategyCache map[string]*StrategyEntry
 	mu            sync.RWMutex
 	cacheTTL      time.Duration
@@ -58,7 +51,7 @@ type StrategyEntry struct {
 }
 
 // NewPeerPreloader creates a new peer-based preloader
-func NewPeerPreloader(nativeBridge *NativeClient) *PeerPreloader {
+func NewPeerPreloader(nativeBridge *native.NativeClient) *PeerPreloader {
 	return &PeerPreloader{
 		nativeBridge:  nativeBridge,
 		strategyCache: make(map[string]*StrategyEntry),

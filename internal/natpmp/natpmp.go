@@ -1,4 +1,4 @@
-package main
+package natpmp
 
 import (
 	"log"
@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gostream/internal/config"
 	"gostream/internal/gostorm/settings"
 	"gostream/internal/gostorm/torr"
 
@@ -16,22 +17,12 @@ import (
 )
 
 // Global atomic variable to track current external port for metrics (V229)
-var currentNatPort int64
-
-// NatPMPConfig holds the configuration for NAT-PMP port forwarding.
-type NatPMPConfig struct {
-	Enabled      bool   `json:"enabled"`
-	Gateway      string `json:"gateway"`
-	LocalPort    int    `json:"local_port"`
-	VPNInterface string `json:"vpn_interface"`
-	Lifetime     int    `json:"lifetime"`
-	Refresh      int    `json:"refresh"`
-}
+var CurrentNatPort int64
 
 // natpmpLoop runs the NAT-PMP port forwarding loop as a sidecar goroutine.
 // It requests a port mapping from the gateway, sets up iptables rules, and
 // updates GoStorm's PeersListenPort when the external port changes.
-func natpmpLoop(stopChan <-chan struct{}, cfg NatPMPConfig, logger *log.Logger) {
+func NatpmpLoop(stopChan <-chan struct{}, cfg config.NatPMPConfig, logger *log.Logger) {
 	if !cfg.Enabled {
 		return
 	}
@@ -61,7 +52,7 @@ func natpmpLoop(stopChan <-chan struct{}, cfg NatPMPConfig, logger *log.Logger) 
 	iptablesReady := false // Ensure iptables rules are created on first successful mapping
 	if settings.BTsets != nil && settings.BTsets.PeersListenPort > 0 {
 		currentExternalPort = settings.BTsets.PeersListenPort
-		atomic.StoreInt64(&currentNatPort, int64(currentExternalPort))
+		atomic.StoreInt64(&CurrentNatPort, int64(currentExternalPort))
 		logger.Printf("[NatPMP] Initialized with current GoStorm port: %d", currentExternalPort)
 	}
 
@@ -126,7 +117,7 @@ func natpmpLoop(stopChan <-chan struct{}, cfg NatPMPConfig, logger *log.Logger) 
 			updateGoStormPort(externalPort, currentExternalPort, logger)
 
 			currentExternalPort = externalPort
-			atomic.StoreInt64(&currentNatPort, int64(externalPort)) // V229: Expose for metrics
+			atomic.StoreInt64(&CurrentNatPort, int64(externalPort)) // V229: Expose for metrics
 		} else if !iptablesReady && externalPort > 0 {
 			// First successful mapping after restart — port unchanged but iptables rules are gone
 			logger.Printf("[NatPMP] Restoring iptables rules for port %d (post-restart)", externalPort)

@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -12,6 +12,16 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// NatPMPConfig holds the configuration for NAT-PMP port forwarding.
+type NatPMPConfig struct {
+	Enabled      bool   `json:"enabled"`
+	Gateway      string `json:"gateway"`
+	LocalPort    int    `json:"local_port"`
+	VPNInterface string `json:"vpn_interface"`
+	Lifetime     int    `json:"lifetime"`
+	Refresh      int    `json:"refresh"`
+}
 
 // DailyJobConfig: task that can run on specific days of the week.
 // DaysOfWeek uses JS convention: 0=Sunday … 6=Saturday.
@@ -482,12 +492,4 @@ func (c *Config) LogConfig(logger *log.Logger) {
 	logger.Printf("Cache Management: Cleanup=%dm, MaxEntries=%d", c.CacheCleanupIntervalMin, c.MaxCacheEntries)
 	logger.Printf("Network: ProxyPort=%d, MetricsPort=%d", c.ProxyListenPort, c.MetricsPort)
 	logger.Printf("=====================")
-}
-
-// GetStateDir returns the centralized state directory path
-func GetStateDir() string {
-	if globalConfig.RootPath == "" {
-		return "/home/pi/STATE" // Default fallback
-	}
-	return filepath.Join(globalConfig.RootPath, "STATE")
 }

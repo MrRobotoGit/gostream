@@ -1,4 +1,4 @@
-package main
+package cache
 
 import (
 	"encoding/json"
@@ -79,8 +79,8 @@ func (s *SyncCacheManager) LoadCachesFromDisk() error {
 
 func (s *SyncCacheManager) loadFromJSONLocked() error {
 	// Legacy JSON loading (fallback when StateDB is disabled)
-	negPath := GetStateDir() + "/no_mkv_hashes.json"
-	fullPath := GetStateDir() + "/tv_fullpacks.json"
+	negPath := s.stateDir + "/no_mkv_hashes.json"
+	fullPath := s.stateDir + "/tv_fullpacks.json"
 
 	if data, err := readFileSafe(negPath); err == nil {
 		if err := unmarshalJSON(data, &s.negativeCache); err != nil {

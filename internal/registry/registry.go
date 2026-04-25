@@ -1,7 +1,9 @@
-package main
+package registry
 
 import (
 	"encoding/json"
+	"io/ioutil"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,6 +12,8 @@ import (
 
 	"gostream/internal/metadb"
 )
+
+var logger = log.New(os.Stdout, "[Registry] ", log.LstdFlags)
 
 // EpisodeEntry matches the Python registry format.
 type EpisodeEntry struct {
@@ -30,9 +34,16 @@ func SetRegistryDB(db *metadb.DB) {
 	registryDB = db
 }
 
+var stateDir string
+
+// SetStateDir sets the state directory path for this package.
+func SetStateDir(dir string) {
+	stateDir = dir
+}
+
 // GetRegistryPath returns the path to tv_episode_registry.json.
 func GetRegistryPath() string {
-	return filepath.Join(GetStateDir(), "tv_episode_registry.json")
+	return filepath.Join(stateDir, "tv_episode_registry.json")
 }
 
 // StartRegistryWatchdog runs the self-healing check at startup and then every 24 hours.
@@ -228,4 +239,12 @@ func saveRegistryLocked(path string, registry map[string]EpisodeEntry) error {
 	}
 	_, err = f.Write(data)
 	return err
+}
+
+func readFileSafe(path string) ([]byte, error) {
+	return ioutil.ReadFile(path)
+}
+
+func unmarshalJSON(data []byte, target interface{}) error {
+	return json.Unmarshal(data, target)
 }

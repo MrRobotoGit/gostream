@@ -1,4 +1,4 @@
-package main
+package telemetry
 
 import (
 	"bytes"
@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"runtime"
 	"time"
+
+	"gostream/internal/config"
 )
 
 // SendHeartbeat sends an anonymous heartbeat to the telemetry server.
 // Runs in a goroutine to avoid blocking startup.
-func SendHeartbeat(cfg Config) {
+func SendHeartbeat(cfg config.Config, version string) {
 	if !cfg.EnableTelemetry || cfg.TelemetryURL == "" {
 		return
 	}
@@ -22,7 +24,7 @@ func SendHeartbeat(cfg Config) {
 
 		payload := map[string]string{
 			"id":      cfg.TelemetryID,
-			"version": AppVersion,
+			"version": version,
 			"arch":    runtime.GOARCH,
 			"os":      runtime.GOOS,
 		}

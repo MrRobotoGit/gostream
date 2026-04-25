@@ -1,4 +1,4 @@
-package main
+package cache
 
 import (
 	"container/list"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"gostream/internal/vfs"
 )
 
 // ShardedLRUCache Wrapper per ridurre la contesa sui lock (V231-Fix)
@@ -38,11 +39,11 @@ func (c *LRUCache) getShard(key string) *simpleLRUCache {
 	return c.shards[xxhash.Sum64String(key)&c.shardMask]
 }
 
-func (c *LRUCache) Get(key string) (*Metadata, bool) {
+func (c *LRUCache) Get(key string) (*vfs.Metadata, bool) {
 	return c.getShard(key).Get(key)
 }
 
-func (c *LRUCache) Put(key string, value *Metadata, size int64) {
+func (c *LRUCache) Put(key string, value *vfs.Metadata, size int64) {
 	c.getShard(key).Put(key, value, size)
 }
 
@@ -117,7 +118,7 @@ func newSimpleLRUCache(capacity int64, ttl time.Duration) *simpleLRUCache {
 }
 
 // Get retrieves a value from the cache and marks it as recently used
-func (c *simpleLRUCache) Get(key string) (*Metadata, bool) {
+func (c *simpleLRUCache) Get(key string) (*vfs.Metadata, bool) {
 	// Optimize: Use Read Lock for most accesses
 	c.mu.RLock()
 	elem, exists := c.items[key]
@@ -162,7 +163,7 @@ func (c *simpleLRUCache) Get(key string) (*Metadata, bool) {
 	return val, true
 }
 
-func (c *simpleLRUCache) Put(key string, value *Metadata, size int64) {
+func (c *simpleLRUCache) Put(key string, value *vfs.Metadata, size int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -266,7 +267,7 @@ func (c *simpleLRUCache) Clear() {
 // cacheEntry represents a single cache entry with metadata and TTL
 type cacheEntry struct {
 	key          string
-	value        *Metadata
+	value        *vfs.Metadata
 	size         int64     // Approximate size in bytes
 	expiresAt    time.Time // TTL expiration time
 	lastPromoted time.Time // V239-Optimization: Lazy Promotion timestamp

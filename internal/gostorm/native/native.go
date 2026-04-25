@@ -1,4 +1,4 @@
-package main
+package native
 
 import (
 	"context"
@@ -9,11 +9,22 @@ import (
 	"gostream/internal/gostorm/torr"
 	"gostream/internal/gostorm/torr/state"
 	apiUtils "gostream/internal/gostorm/web/api/utils"
+	"gostream/internal/warmup"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// TorrentStats is used by NativeClient methods to report torrent status.
+type TorrentStats struct {
+	Hash          string  `json:"hash"`
+	Title         string  `json:"title"`
+	DownloadSpeed float64 `json:"download_speed"`
+	TotalPeers    int     `json:"total_peers"`
+	ActivePeers   int     `json:"active_peers"`
+	Downloaded    int64   `json:"downloaded"`
+}
 
 // NativeClient abstracts direct calls to the internal GoStorm instance
 // eliminating HTTP overhead for metadata operations.
@@ -396,8 +407,8 @@ func (c *NativeClient) ListTorrents() ([]TorrentStats, error) {
 func (c *NativeClient) RemoveTorrent(hash string) error {
 	torr.RemTorrent(hash)
 	// V272: Clean up disk warmup files for this hash
-	if diskWarmup != nil && hash != "" {
-		diskWarmup.RemoveHash(hash)
+	if warmup.DiskWarmup != nil && hash != "" {
+		warmup.DiskWarmup.RemoveHash(hash)
 	}
 	return nil
 }
