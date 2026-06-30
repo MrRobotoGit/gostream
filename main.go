@@ -1027,7 +1027,9 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		h.nativeReader = nativeBridge.NewStreamReader(finalHash, fileIdx, h.size)
 		if tr := torr.PeekTorrent(finalHash); tr != nil && tr.Torrent != nil {
 			if info := tr.Torrent.Info(); info != nil && info.PieceLength > 0 {
-				h.nativeReader.SetPieceLen(int64(info.PieceLength))
+				pl := int64(info.PieceLength)
+				h.nativeReader.SetPieceLen(pl)
+				raCache.SetPieceLen(h.path, pl)
 			}
 		}
 
@@ -1064,10 +1066,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 
 		// Anchor pump to player position when MaxCachedOffset is stale-high to prevent EOF loops.
 		if playerOff := atomic.LoadInt64(&h.lastOff); playerOff > 0 {
-			chunkSize := int64(gc().ReadAheadBase)
-			if chunkSize == 0 {
-				chunkSize = 16 * 1024 * 1024
-			}
+			chunkSize := raCache.ChunkSize(h.path)
 			if resumeOffset > playerOff+chunkSize*2 {
 				aligned := (playerOff / chunkSize) * chunkSize
 				logger.Printf("[V700] Pump anchored to player: %.1fMB (MaxCached was %.1fMB)",
@@ -1090,10 +1089,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 
 		// Anchor pump to player position on resume to eliminate anacrolix priority competition.
 		{
-			chunkSize := int64(gc().ReadAheadBase)
-			if chunkSize == 0 {
-				chunkSize = 16 * 1024 * 1024
-			}
+			chunkSize := raCache.ChunkSize(h.path)
 			if raV310 := atomic.LoadInt64(&h.lastOff); raV310 > 0 && resumeOffset+chunkSize < raV310 {
 				pumpStartV310 := (raV310 / chunkSize) * chunkSize
 				logger.Printf("[V310] Resume anchor: pump start → %dMB (player at %dMB)",
@@ -1170,16 +1166,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		logger.Printf("[V239] Native Pump Goroutine Ended: %s", filepath.Base(h.path))
 	}()
 
-	defaultChunk := int64(gc().ReadAheadBase)
-	if defaultChunk == 0 {
-		defaultChunk = 8 * 1024 * 1024
-	}
-	chunkSize := defaultChunk
-	if pl := pumpReader.PieceLen(); pl > 0 {
-		if n := defaultChunk / pl; n > 0 {
-			chunkSize = n * pl
-		}
-	}
+	chunkSize := raCache.ChunkSize(h.path)
 
 	// Track bytes pumped in this session for the Grace Period Boost
 	pumpedBytes := int64(0)
@@ -1193,12 +1180,8 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		default:
 		}
 
-		// Re-align chunkSize to piece boundary once pieceLen is known (may be 0 initially).
-		if pl := pumpReader.PieceLen(); pl > 0 {
-			if n := defaultChunk / pl; n > 0 {
-				chunkSize = n * pl
-			}
-		}
+		// Re-read chunkSize each iteration: pieceLen may arrive after pump start (new torrents).
+		chunkSize = raCache.ChunkSize(h.path)
 
 		// Release idle slot: confirmed playback gets 2h, background scans get 45s.
 		// Check all handles for this path, not just the pump creator.
@@ -1645,7 +1628,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		atomic.StoreInt64(&h.lastOff, off)
 
 		// Predictive prefetch: fetch next chunk if pump is absent or near boundary.
-		chunkSize := int64(gc().ReadAheadBase)
+		chunkSize := raCache.ChunkSize(h.path)
 		nextChunkStart := (off/chunkSize + 1) * chunkSize
 
 		if (!h.hasSlot || (nextChunkStart-off < chunkSize/4)) && !raCache.Exists(h.path, nextChunkStart) {
@@ -1889,7 +1872,7 @@ DATA_READY:
 		nCopy := copy(dest, buf[:n])
 
 		// Prefetch next chunk if in last 25% of current chunk and pump is absent or lagging.
-		chunkSize := int64(gc().ReadAheadBase)
+		chunkSize := raCache.ChunkSize(h.path)
 		currentChunkIndex := off / chunkSize
 		nextChunkStart := (currentChunkIndex + 1) * chunkSize
 		distanceToNext := nextChunkStart - off
@@ -2200,6 +2183,36 @@ type ReadAheadCache struct {
 	activePath       string
 	currentSessionID int64
 	isEvicting       int32 // atomic flag prevents concurrent global evictions
+
+	pieceLens sync.Map // path → int64 adaptive chunk size (aligned to piece boundary)
+}
+
+// SetPieceLen stores the aligned chunk size for path derived from piece length.
+// Called at pump start once pieceLen is known; both pump and raCache share this value.
+func (c *ReadAheadCache) SetPieceLen(path string, pl int64) {
+	base := int64(gc().ReadAheadBase)
+	if base == 0 {
+		base = 16 * 1024 * 1024
+	}
+	if pl > 0 {
+		if n := base / pl; n > 0 {
+			c.pieceLens.Store(path, n*pl)
+			return
+		}
+	}
+	c.pieceLens.Delete(path)
+}
+
+// ChunkSize returns the adaptive chunk size for path (falls back to ReadAheadBase).
+func (c *ReadAheadCache) ChunkSize(path string) int64 {
+	if v, ok := c.pieceLens.Load(path); ok {
+		return v.(int64)
+	}
+	base := int64(gc().ReadAheadBase)
+	if base == 0 {
+		base = 16 * 1024 * 1024
+	}
+	return base
 }
 
 type raShard struct {
@@ -2278,13 +2291,9 @@ func (c *ReadAheadCache) InvalidatePath(p string) {
 	s.order = newOrder
 }
 
-// raChunkKey returns a compound key so multiple chunks per file can coexist.
-func raChunkKey(path string, offset int64) string {
-	chunkSize := int64(16 * 1024 * 1024)
-	if gc().ReadAheadBase > 0 {
-		chunkSize = int64(gc().ReadAheadBase)
-	}
-	return fmt.Sprintf("%s:%d", path, offset/chunkSize)
+// chunkKey returns a compound key using the per-path adaptive chunk size.
+func (c *ReadAheadCache) chunkKey(path string, offset int64) string {
+	return fmt.Sprintf("%s:%d", path, offset/c.ChunkSize(path))
 }
 
 // SwitchContext increments SessionID on path change to invalidate stale data.
@@ -2311,7 +2320,7 @@ func (c *ReadAheadCache) Get(p string, off, end int64) []byte {
 	s := c.getShard(p)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	key := raChunkKey(p, off)
+	key := c.chunkKey(p, off)
 	if b, ok := s.buffers[key]; ok && off >= b.start && off <= b.end {
 		atomic.StoreInt64(&b.lastAccess, time.Now().UnixNano())
 		if end <= b.end {
@@ -2322,7 +2331,7 @@ func (c *ReadAheadCache) Get(p string, off, end int64) []byte {
 			return out
 		}
 		// Cross-boundary read: stitch two adjacent chunks to avoid FetchBlock on chunk boundary straddles.
-		if b2, ok2 := s.buffers[raChunkKey(p, end)]; ok2 && b2.start == b.end+1 && b2.end >= end {
+		if b2, ok2 := s.buffers[c.chunkKey(p, end)]; ok2 && b2.start == b.end+1 && b2.end >= end {
 			atomic.StoreInt64(&b2.lastAccess, time.Now().UnixNano())
 			out := make([]byte, end-off+1)
 			n1 := copy(out, b.data[off-b.start:])
@@ -2338,7 +2347,7 @@ func (c *ReadAheadCache) Exists(p string, off int64) bool {
 	s := c.getShard(p)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	key := raChunkKey(p, off)
+	key := c.chunkKey(p, off)
 	_, found := s.buffers[key]
 	return found
 }
@@ -2348,7 +2357,7 @@ func (c *ReadAheadCache) CopyTo(p string, off, end int64, dest []byte) int {
 	s := c.getShard(p)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	key := raChunkKey(p, off)
+	key := c.chunkKey(p, off)
 	if b, ok := s.buffers[key]; ok && off >= b.start && off <= b.end {
 		atomic.StoreInt64(&b.lastAccess, time.Now().UnixNano())
 		if end <= b.end {
@@ -2357,7 +2366,7 @@ func (c *ReadAheadCache) CopyTo(p string, off, end int64, dest []byte) int {
 			return copy(dest, src)
 		}
 		// Cross-boundary read: same logic as Get().
-		if b2, ok2 := s.buffers[raChunkKey(p, end)]; ok2 && b2.start == b.end+1 && b2.end >= end {
+		if b2, ok2 := s.buffers[c.chunkKey(p, end)]; ok2 && b2.start == b.end+1 && b2.end >= end {
 			atomic.StoreInt64(&b2.lastAccess, time.Now().UnixNano())
 			n1 := copy(dest, b.data[off-b.start:])
 			n2 := copy(dest[n1:], b2.data[:end-b2.start+1])
@@ -2380,7 +2389,7 @@ func (c *ReadAheadCache) Put(p string, start, end int64, d []byte) {
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
-	key := raChunkKey(p, start)
+	key := c.chunkKey(p, start)
 
 	dataSize := int64(len(d))
 
