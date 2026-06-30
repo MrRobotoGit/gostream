@@ -19,6 +19,14 @@ import (
 )
 
 const speedHistorySize = 60
+const shieldEventWindow = 10 * time.Minute
+
+// ShieldEvent represents an AdaptiveShield log event.
+// Type: "corruption" (single bad piece), "strict" (STRICT mode started), "restore" (FAST mode restored).
+type ShieldEvent struct {
+	Type string `json:"type"`
+	Time int64  `json:"t"` // UnixMilli
+}
 
 // HealthStatus holds the current system health snapshot.
 type HealthStatus struct {
@@ -104,10 +112,13 @@ type Collector struct {
 	plexToken  string
 	natpmpPort int
 
+	logsDir string
+
 	mu           sync.RWMutex
 	status       HealthStatus
 	torrents     []TorrentInfo
 	speedHistory []SpeedPoint
+	shieldEvents []ShieldEvent
 	start        time.Time
 	httpClient   *http.Client
 
@@ -122,7 +133,7 @@ type Collector struct {
 }
 
 // New creates a Collector.
-func New(gostormURL, fusePath, sourcePath, vpnIface, plexURL, plexToken string, natpmpPort, metricsPort int) *Collector {
+func New(gostormURL, fusePath, sourcePath, vpnIface, plexURL, plexToken string, natpmpPort, metricsPort int, logsDir string) *Collector {
 	return &Collector{
 		gostormURL:   gostormURL,
 		metricsURL:   fmt.Sprintf("http://127.0.0.1:%d/metrics", metricsPort),
@@ -132,6 +143,7 @@ func New(gostormURL, fusePath, sourcePath, vpnIface, plexURL, plexToken string, 
 		plexURL:      plexURL,
 		plexToken:    plexToken,
 		natpmpPort:   natpmpPort,
+		logsDir:      logsDir,
 		start:        time.Now(),
 		speedHistory: make([]SpeedPoint, 0, speedHistorySize),
 		httpClient:   &http.Client{Timeout: 5 * time.Second},
@@ -176,6 +188,59 @@ func (c *Collector) SpeedHistory() []SpeedPoint {
 	out := make([]SpeedPoint, len(c.speedHistory))
 	copy(out, c.speedHistory)
 	return out
+}
+
+// ShieldEvents returns the recent AdaptiveShield event list.
+func (c *Collector) ShieldEvents() []ShieldEvent {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]ShieldEvent, len(c.shieldEvents))
+	copy(out, c.shieldEvents)
+	return out
+}
+
+var (
+	reShieldTS      = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})`)
+	reShieldStrict  = regexp.MustCompile(`\[AdaptiveShield\].*Force STRICT mode`)
+	reShieldRestore = regexp.MustCompile(`\[AdaptiveShield\].*Restoring FAST mode`)
+	reShieldCorr    = regexp.MustCompile(`\[AdaptiveShield\] (?:Single|Persistent) corruption`)
+)
+
+// parseShieldEvents reads the last portion of gostream.log and extracts
+// AdaptiveShield events within the last shieldEventWindow.
+func (c *Collector) parseShieldEvents() []ShieldEvent {
+	if c.logsDir == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(c.logsDir, "gostream.log"))
+	if err != nil {
+		return nil
+	}
+	if len(data) > 256*1024 {
+		data = data[len(data)-256*1024:]
+	}
+	cutoff := time.Now().Add(-shieldEventWindow)
+	var events []ShieldEvent
+	for _, line := range strings.Split(string(data), "\n") {
+		m := reShieldTS.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		t, err := time.ParseInLocation("2006/01/02 15:04:05", m[1], time.Local)
+		if err != nil || t.Before(cutoff) {
+			continue
+		}
+		ms := t.UnixMilli()
+		switch {
+		case reShieldStrict.MatchString(line):
+			events = append(events, ShieldEvent{Type: "strict", Time: ms})
+		case reShieldRestore.MatchString(line):
+			events = append(events, ShieldEvent{Type: "restore", Time: ms})
+		case reShieldCorr.MatchString(line):
+			events = append(events, ShieldEvent{Type: "corruption", Time: ms})
+		}
+	}
+	return events
 }
 
 // PlexURL returns the configured Plex base URL (for server-side proxy use only).
@@ -232,6 +297,7 @@ func (c *Collector) collect() {
 	s.DownloadMbps = totalSpeedMB * 8
 
 	point := SpeedPoint{Time: time.Now().UnixMilli(), Speed: s.DownloadMbps}
+	shieldEvts := c.parseShieldEvents()
 
 	c.mu.Lock()
 	c.status = s
@@ -240,6 +306,7 @@ func (c *Collector) collect() {
 	if len(c.speedHistory) > speedHistorySize {
 		c.speedHistory = c.speedHistory[len(c.speedHistory)-speedHistorySize:]
 	}
+	c.shieldEvents = shieldEvts
 	c.mu.Unlock()
 }
 

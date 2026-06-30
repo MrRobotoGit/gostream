@@ -39,6 +39,15 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
       <span class="text-2xl font-bold"><span id="speed">0</span> <span class="text-sm text-slate-400">Mbps</span></span>
     </div>
     <div style="height:150px;position:relative"><canvas id="speedChart"></canvas></div>
+    <canvas id="shieldTimeline" style="width:100%;height:10px;display:block;margin-top:6px"></canvas>
+    <div class="flex items-center gap-4 mt-1.5">
+      <span class="flex items-center gap-1.5 text-[10px] text-slate-500">
+        <span style="width:7px;height:7px;border-radius:50%;background:#f97316;display:inline-block;flex-shrink:0"></span>Adaptive Shield
+      </span>
+      <span class="flex items-center gap-1.5 text-[10px] text-slate-500">
+        <span style="width:16px;height:7px;border-radius:3px;background:rgba(234,179,8,0.50);display:inline-block;flex-shrink:0"></span>Strict Mode
+      </span>
+    </div>
   </div>
   <div class="glass rounded-xl p-4">
     <div class="flex items-center justify-between mb-3">
@@ -165,10 +174,50 @@ function svc(el,st){
 function fmtSize(b){if(!b||b<1024)return'0 B';const u=['B','KB','MB','GB','TB'];let i=0,v=b;while(v>=1024&&i<u.length-1){v/=1024;i++}return v.toFixed(1)+' '+u[i]}
 function trunc(t,n){return t&&t.length>n?t.slice(0,n)+'...':t||'--'}
 
+function drawShieldTimeline(events,history){
+  const canvas=document.getElementById('shieldTimeline');
+  if(!canvas)return;
+  const W=canvas.offsetWidth||canvas.parentElement.offsetWidth||300;
+  const H=10;
+  canvas.width=W;canvas.height=H;
+  const ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='rgba(15,23,42,0.5)';
+  ctx.fillRect(0,0,W,H);
+  if(!history||history.length<2)return;
+  const tMin=history[0].t,tMax=history[history.length-1].t;
+  if(tMax<=tMin)return;
+  const toX=t=>Math.round((t-tMin)/(tMax-tMin)*W);
+  const sorted=[...(events||[])].sort((a,b)=>a.t-b.t);
+  // Draw STRICT segments (amber fill)
+  let strictAt=null;
+  for(const ev of sorted){
+    if(ev.type==='strict'){strictAt=ev.t;}
+    else if(ev.type==='restore'&&strictAt!==null){
+      const x1=Math.max(0,toX(strictAt)),x2=Math.min(W,toX(ev.t));
+      if(x2>x1){ctx.fillStyle='rgba(234,179,8,0.30)';ctx.fillRect(x1,0,x2-x1,H);}
+      strictAt=null;
+    }
+  }
+  if(strictAt!==null){
+    const x1=Math.max(0,toX(strictAt));
+    ctx.fillStyle='rgba(234,179,8,0.40)';ctx.fillRect(x1,0,W-x1,H);
+  }
+  // Draw corruption/strict-start dots (orange)
+  for(const ev of sorted){
+    if(ev.type==='corruption'||ev.type==='strict'){
+      const x=toX(ev.t);
+      if(x<0||x>W)continue;
+      ctx.beginPath();ctx.arc(x,H/2,3,0,Math.PI*2);
+      ctx.fillStyle='#f97316';ctx.fill();
+    }
+  }
+}
+
 async function load(){
   try{
-    const[hR,tR,sR]=await Promise.all([fetch('/api/health'),fetch('/api/torrents'),fetch('/api/speed-history')]);
-    const h=await hR.json(),torrents=await tR.json(),history=await sR.json();
+    const[hR,tR,sR,shR]=await Promise.all([fetch('/api/health'),fetch('/api/torrents'),fetch('/api/speed-history'),fetch('/api/shield-events')]);
+    const h=await hR.json(),torrents=await tR.json(),history=await sR.json(),shieldEvts=await shR.json();
 
     document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString();
     document.getElementById('uptime').textContent=h.uptime;
@@ -195,6 +244,7 @@ async function load(){
       chart.data.datasets[0].data=history.map(p=>p.v);
       chart.update('none');
     }
+    drawShieldTimeline(shieldEvts,history);
 
     // Active streams
     const active=(torrents||[]).filter(t=>t.status!=='idle').sort((a,b)=>b.speed_mbs-a.speed_mbs);

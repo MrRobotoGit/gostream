@@ -3518,6 +3518,7 @@ func main() {
 	}
 
 	// Health Monitor + Dashboard (Fase 5)
+	logsDir := filepath.Join(filepath.Dir(gc().ConfigPath), "logs")
 	monCollector := collector.New(
 		"http://127.0.0.1:8090",
 		gc().FuseMountPath,
@@ -3527,13 +3528,14 @@ func main() {
 		gc().Plex.Token,
 		gc().NatPMP.LocalPort,
 		gc().MetricsPort,
+		logsDir,
 	)
-	logsDir := filepath.Join(filepath.Dir(gc().ConfigPath), "logs")
 	dashHandler := dashboard.New(monCollector, logsDir)
 	http.HandleFunc("/dashboard", dashHandler.Dashboard)
 	http.HandleFunc("/api/health", dashHandler.Health)
 	http.HandleFunc("/api/torrents", dashHandler.Torrents)
 	http.HandleFunc("/api/speed-history", dashHandler.SpeedHistory)
+	http.HandleFunc("/api/shield-events", dashHandler.ShieldEvents)
 	http.HandleFunc("/api/logs", dashHandler.Logs)
 	http.HandleFunc("/api/plex-thumb", dashHandler.PlexThumb)
 	http.HandleFunc("/api/kill-stream/", dashHandler.KillStream)

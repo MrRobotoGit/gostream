@@ -59,6 +59,16 @@ func (h *Handler) SpeedHistory(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(s)
 }
 
+// ShieldEvents serves the /api/shield-events JSON endpoint.
+func (h *Handler) ShieldEvents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	evts := h.collector.ShieldEvents()
+	if evts == nil {
+		evts = []collector.ShieldEvent{}
+	}
+	json.NewEncoder(w).Encode(evts)
+}
+
 // Logs serves the /api/logs endpoint (tail of log files).
 func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
