@@ -228,6 +228,18 @@ func (t *Torrent) updateRA() {
 	go t.cache.AdjustRA(adj)
 }
 
+// IsStreaming returns true if the torrent has active FUSE readers or non-zero download speed.
+// Used by listActiveTorrents to avoid serializing idle bt.torrents entries.
+func (t *Torrent) IsStreaming() bool {
+	if t.cache != nil && t.cache.Readers() > 0 {
+		return true
+	}
+	t.muTorrent.Lock()
+	s := t.DownloadSpeed
+	t.muTorrent.Unlock()
+	return s > 0
+}
+
 func (t *Torrent) expired() bool {
 	if t.IsPriority.Load() {
 		return false // V185: Never expire if marked as high priority (active stream)

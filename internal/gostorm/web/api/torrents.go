@@ -203,13 +203,14 @@ func listTorrents(c *gin.Context) {
 
 func listActiveTorrents(c *gin.Context) {
 	list := torr.ListActiveTorrent()
-	if len(list) == 0 {
-		c.JSON(200, []*state.TorrentStatus{})
-		return
-	}
 	var stats []*state.TorrentStatus
 	for _, tr := range list {
-		stats = append(stats, tr.Status())
+		if tr.IsStreaming() {
+			stats = append(stats, tr.Status())
+		}
+	}
+	if stats == nil {
+		stats = []*state.TorrentStatus{}
 	}
 	c.JSON(200, stats)
 }
