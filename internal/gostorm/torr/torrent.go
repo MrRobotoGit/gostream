@@ -338,6 +338,15 @@ func (t *Torrent) Close() bool {
 	}
 
 	t.drop()
+
+	// CloseHash was previously dead code: Storage.caches[hash] was never evicted, so every
+	// torrent ever touched during the process lifetime kept its *Cache — and every piece
+	// buffer received from peers (torrstor.MemPiece.buffer) — permanently reachable, even
+	// after the torrent itself expired and was dropped. Cache.Close() is idempotent (guarded
+	// by isClosed), so this is safe even if anacrolix's storage.TorrentImpl.Close already fired.
+	if t.bt != nil && t.bt.storage != nil {
+		t.bt.storage.CloseHash(t.Hash())
+	}
 	return true
 }
 
