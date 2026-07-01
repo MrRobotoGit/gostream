@@ -774,7 +774,7 @@ func (e *MovieGoEngine) rehydrateMissingTorrents(ctx context.Context) {
 			return nil
 		}
 
-		var url, magnet string
+		var url, magnet, imdbID string
 		var size float64
 		content := strings.TrimSpace(string(data))
 
@@ -786,6 +786,7 @@ func (e *MovieGoEngine) rehydrateMissingTorrents(ctx context.Context) {
 			url, _ = obj["url"].(string)
 			magnet, _ = obj["magnet"].(string)
 			size, _ = obj["size"].(float64)
+			imdbID, _ = obj["imdb"].(string)
 		} else {
 			lines := strings.SplitN(content, "\n", 4)
 			if len(lines) < 3 {
@@ -795,6 +796,9 @@ func (e *MovieGoEngine) rehydrateMissingTorrents(ctx context.Context) {
 			magnet = strings.TrimSpace(lines[2])
 			if len(lines) > 1 {
 				size, _ = strconv.ParseFloat(strings.TrimSpace(lines[1]), 64)
+			}
+			if len(lines) >= 4 {
+				imdbID = strings.TrimSpace(lines[3])
 			}
 		}
 
@@ -812,7 +816,11 @@ func (e *MovieGoEngine) rehydrateMissingTorrents(ctx context.Context) {
 			displayTitle := TitleFromFilename(info.Name())
 			freshMagnet := BuildMagnet(hash, displayTitle, DefaultTrackers())
 			if _, err := e.gostorm.AddTorrent(ctx, freshMagnet, displayTitle); err == nil {
-				e.createMKV(path, url, int64(size), freshMagnet, "")
+				// Preserve the original imdb field — previously hardcoded to "", which silently
+				// wiped dedup metadata on every rehydration and let buildExistingMovieIndex's
+				// imdb=="" skip make the file invisible to future dedup checks (root cause of
+				// duplicate movie files after a torrent expired and got rehydrated).
+				e.createMKV(path, url, int64(size), freshMagnet, imdbID)
 			}
 		}
 
