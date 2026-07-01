@@ -2188,13 +2188,22 @@ func (c *ReadAheadCache) SetPieceLen(path string, pl int64) {
 	if base == 0 {
 		base = 16 * 1024 * 1024
 	}
-	if pl > 0 {
-		if n := base / pl; n > 0 {
-			c.pieceLens.Store(path, n*pl)
-			return
-		}
+	if pl <= 0 {
+		c.pieceLens.Delete(path)
+		return
 	}
-	c.pieceLens.Delete(path)
+	if n := base / pl; n > 0 {
+		// pl fits within base: use the largest multiple of pl that's <= base, so chunk
+		// boundaries always land on piece boundaries.
+		c.pieceLens.Store(path, n*pl)
+		return
+	}
+	// pl > base: BitTorrent piece lengths are always powers of two (BEP3/BEP52), and base
+	// defaults to a power of two as well, so base always evenly divides pl here — using base
+	// directly still lands every chunk boundary exactly on a piece boundary. Stored explicitly
+	// (instead of falling through to ChunkSize's own base fallback) so pieceLens always has an
+	// entry once pieceLen is known, and re-reads pick up base config changes at pump start.
+	c.pieceLens.Store(path, base)
 }
 
 // ChunkSize returns the adaptive chunk size for path (falls back to ReadAheadBase).
