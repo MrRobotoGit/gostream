@@ -62,10 +62,15 @@ type Torrent struct {
 	dataUploadDisallowed   bool
 	userOnWriteChunkErr    func(error)
 
-	closed   chansync.SetOnce
-	onClose  []func()
-	infoHash metainfo.Hash
-	pieces   []Piece
+	closed chansync.SetOnce
+	// A background Context cancelled when the Torrent is closed. Shared by tracker scrapers to
+	// avoid spawning an extra per-tracker goroutine just to bridge me.t.Closed() into a local
+	// context (backported from anacrolix/torrent upstream, commit 6e3fd9a9e5).
+	closedCtx       context.Context
+	closedCtxCancel func()
+	onClose         []func()
+	infoHash        metainfo.Hash
+	pieces          []Piece
 
 	// The order pieces are requested if there's no stronger reason like availability or priority.
 	pieceRequestOrder []int
@@ -898,6 +903,7 @@ func (t *Torrent) close(wg *sync.WaitGroup) (err error) {
 		err = errors.New("already closed")
 		return
 	}
+	t.closedCtxCancel()
 	for _, f := range t.onClose {
 		f()
 	}

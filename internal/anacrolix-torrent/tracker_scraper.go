@@ -201,15 +201,11 @@ func (me *trackerScraper) canIgnoreInterval(notify *<-chan struct{}) bool {
 func (me *trackerScraper) Run() {
 	defer me.announceStopped()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		defer cancel()
-		select {
-		case <-ctx.Done():
-		case <-me.t.Closed():
-		}
-	}()
+	// Backported from anacrolix/torrent upstream (commit 6e3fd9a9e5): use the torrent's shared
+	// closedCtx instead of spawning an extra goroutine per tracker scraper just to bridge
+	// me.t.Closed() into a locally-cancelable context. With torrents carrying many trackers,
+	// that extra goroutine doubled the tracker-scraper goroutine count for no benefit.
+	ctx := me.t.closedCtx
 
 	// make sure first announce is a "started"
 	e := tracker.Started

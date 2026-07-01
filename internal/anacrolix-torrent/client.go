@@ -1316,6 +1316,7 @@ func (cl *Client) newTorrentOpt(opts AddTorrentOpts) (t *Torrent) {
 		webSeeds:     make(map[string]*Peer),
 		gotMetainfoC: make(chan struct{}),
 	}
+	t.closedCtx, t.closedCtxCancel = context.WithCancel(context.Background())
 	var salt [8]byte
 	rand.Read(salt[:])
 	t.smartBanCache.Hash = func(b []byte) uint64 {
