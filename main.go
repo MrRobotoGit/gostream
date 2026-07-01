@@ -1443,10 +1443,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			// WarmLanding on new handle: pre-fetch chunk at resume position while pump catches
 			// up. Fires only for new handles (prevOff==-1) since V286b covers existing handles.
 			if prevOff == -1 && h.hash != "" {
-				warmChunk := int64(gc().ReadAheadBase)
-				if warmChunk == 0 {
-					warmChunk = 16 * 1024 * 1024
-				}
+				warmChunk := raCache.ChunkSize(h.path)
 				warmStart := (off / warmChunk) * warmChunk
 				warmKey := fmt.Sprintf("warm:%s:%d", h.path, warmStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(warmKey, true); !loaded {
@@ -1528,10 +1525,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			// pump sleeps its 200ms retry. Starts anacrolix piece download ~200ms earlier,
 			// reducing FetchBlock blocking time in Read() and preventing smbd D-state.
 			if h.hash != "" {
-				warmChunk := int64(gc().ReadAheadBase)
-				if warmChunk == 0 {
-					warmChunk = 16 * 1024 * 1024
-				}
+				warmChunk := raCache.ChunkSize(h.path)
 				warmStart := (off / warmChunk) * warmChunk
 				warmKey := fmt.Sprintf("warm:%s:%d", h.path, warmStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(warmKey, true); !loaded {
