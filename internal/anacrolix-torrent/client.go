@@ -1140,7 +1140,7 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 			return // has something relevant to the warmup region, keep the connection
 		}
 	}
-	t.logger.Printf("[PEXChurn] dropping peer %v - no warmup-region pieces (file range [%d,%d)) after %v probe", pc.RemoteAddr, begin, end, probeWindow)
+	t.logger.WithDefaultLevel(log.Warning).Printf("[PEXChurn] dropping peer %v - no warmup-region pieces (file range [%d,%d)) after %v probe", pc.RemoteAddr, begin, end, probeWindow)
 	pc.drop()
 }
 

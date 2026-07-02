@@ -1037,6 +1037,12 @@ func (t *Torrent) checkAndFireHedges() {
 	}
 	now := time.Now()
 	for r, rs := range t.requestState {
+		if t.hedgeCircuitOpen.Load() {
+			// A single scan can find many simultaneously-stalled requests (e.g. a near-dead
+			// swarm) - stop as soon as the breaker trips mid-loop instead of calling fireHedge
+			// (and re-tripping/re-logging) once per remaining stalled request in this same scan.
+			return
+		}
 		if _, alreadyHedged := t.hedgedRequests[r]; alreadyHedged {
 			continue // one hedge per request - don't re-hedge an already-hedged still-pending request
 		}
@@ -1091,12 +1097,17 @@ func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer) {
 	}
 	count := t.hedgeWindowCount.Add(1)
 	if count > hedgeCircuitBreakerThreshold {
-		t.hedgeCircuitOpen.Store(true)
-		t.logger.Printf("[TailHedge] Circuit breaker tripped: %d hedges/60s, disabling — VPN tunnel likely saturated, not peer variance", count)
+		// CompareAndSwap so the trip log/cooldown-scheduling only happens once, even though
+		// count keeps climbing past the threshold on every subsequent call within the same
+		// window (e.g. a single checkAndFireHedges scan finding many stalled requests at once).
+		if !t.hedgeCircuitOpen.CompareAndSwap(false, true) {
+			return
+		}
+		t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] Circuit breaker tripped: %d hedges/60s, disabling — VPN tunnel likely saturated, not peer variance", count)
 		time.AfterFunc(hedgeCircuitBreakerCooldown, func() {
 			t.hedgeCircuitOpen.Store(false)
 			t.hedgeWindowCount.Store(0)
-			t.logger.Printf("[TailHedge] Circuit breaker cooldown elapsed, re-enabling hedging")
+			t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] Circuit breaker cooldown elapsed, re-enabling hedging")
 		})
 		return
 	}
@@ -1115,7 +1126,7 @@ func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer) {
 	candidate.validReceiveChunks[r]++
 	candidate.peerImpl._request(req)
 	t.hedgeTriggerCount.Add(1)
-	t.logger.Printf("[TailHedge] Hedging piece=%d begin=%d to %v (original request exceeded p95)", req.Index, req.Begin, candidate.RemoteAddr)
+	t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] Hedging piece=%d begin=%d to %v (original request exceeded p95)", req.Index, req.Begin, candidate.RemoteAddr)
 }
 
 // maxWarmupLatencySamples caps the ring buffer per chunk size - only enough recent samples to
